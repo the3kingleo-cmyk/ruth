@@ -4,15 +4,41 @@ import json, os, platform, re, subprocess, sys, datetime, base64, time
 
 HOME = os.path.expanduser("~")
 CFG_ROOT = os.environ.get("OPENCODE_CONFIG_ROOT", f"{HOME}/.config/opencode")
+
+
+def _load_deployment_env():
+    """Load this machine's deployment values before any of them are read.
+
+    The public repository carries no owner name, memory repository or machine
+    path; those live in $CFG_ROOT/ruth.env on the box that runs it. Values
+    already in the environment win, so an explicit override still works.
+    """
+    path = os.path.join(CFG_ROOT, "ruth.env")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ.setdefault(key.strip(), val.strip())
+
+
+_load_deployment_env()
 # opencode has used both extensions across v1/v2; accept whichever exists.
 CFG = next((p for p in (f"{CFG_ROOT}/opencode.jsonc", f"{CFG_ROOT}/opencode.json")
             if os.path.exists(p)), f"{CFG_ROOT}/opencode.jsonc")
 STATE = f"{CFG_ROOT}/AGENT_STATE.md"
 AUTH = f"{HOME}/.local/share/opencode/auth.json"
 GH_MCP = "https://api.githubcopilot.com/mcp/"
-# Owner/repo are deployment-specific; override with RUTH_OWNER/RUTH_MEMORY_REPO.
-OWNER = os.environ.get("RUTH_OWNER", "OWNER")
-MEMORY_REPO = os.environ.get("RUTH_MEMORY_REPO", f"{OWNER}/memory")
+# The owner's GitHub identity and private memory repo are deployment-specific
+# and are supplied by the environment, never committed here.
+OWNER = os.environ.get("RUTH_OWNER", "")
+MEMORY_REPO = os.environ.get("RUTH_MEMORY_REPO",
+                             f"{OWNER}/memory" if OWNER else "")
 MEMORY_PATH = "state"
 MEMORY_FILES = ["AGENT_STATE.md"]
 PULL_FILES = ["WORKLOG.md", "ERROR_LOG.md"]
@@ -67,16 +93,20 @@ results["github_key"] = bool(r and r.get("login"))
 results["huggingface_key"] = bool(HF_KEY and HF_KEY.startswith("hf_"))
 r = curl_json("https://opencode.ai/zen/v1/models", [f"Authorization: Bearer {OC_KEY}"]) if OC_KEY else None
 results["opencode_zen_key"] = bool(r and "data" in r)
-# Free brain door: cc-bridge on 127.0.0.1:0 (opencode zen + big-pickle).
-# This is the box's actual model source since 2026-09-23 (no OpenRouter key);
-# gate on it so "has a working model source" stays a real check.
-try:
-    _h = subprocess.run(["curl", "-s", "--max-time", "5", "-o", "/dev/null",
-                         "-w", "%{http_code}", "http://127.0.0.1:0/health"],
-                        capture_output=True, text=True).stdout.strip()
-    results["zen_door"] = _h == "200"
-except Exception:
-    results["zen_door"] = False
+# Optional local model source (a self-hosted gateway). Deployment-specific, so
+# the URL comes from the environment. Absent/unreachable simply means this
+# check does not apply -- it never guesses a port.
+ZEN_HEALTH = os.environ.get("RUTH_MODEL_HEALTH_URL", "")
+if ZEN_HEALTH:
+    try:
+        _h = subprocess.run(["curl", "-s", "--max-time", "5", "-o", "/dev/null",
+                             "-w", "%{http_code}", ZEN_HEALTH],
+                            capture_output=True, text=True).stdout.strip()
+        results["zen_door"] = _h == "200"
+    except Exception:
+        results["zen_door"] = False
+else:
+    results["zen_door"] = "n/a (RUTH_MODEL_HEALTH_URL unset)"
 # gumroad: env file locked down; token optional until operator generates it
 _genv = f"{HOME}/.config/opencode/secrets/gumroad.env"
 results["gumroad_env_secure"] = os.path.exists(_genv) and (os.stat(_genv).st_mode & 0o077) == 0
@@ -262,13 +292,18 @@ _DIAG_BINS = ["tsc", "ruff", "shellcheck"]
 results["diagnostics_tools"] = [b for b in _DIAG_BINS
                                 if any(os.path.exists(os.path.join(d, b))
                                        for d in os.environ.get("PATH", "").split(os.pathsep))] or "none"
-# 4. mojibake / corrupt scan (private-app index) — only if the clone exists locally
-pd_path = f"{HOME}/gitwork/private-app-pwa/index.html"
-if os.path.exists(pd_path):
-    pd = open(pd_path, encoding="utf-8").read()
-    results["mojibake_remaining"] = sum(1 for c in pd if 0xE0 <= ord(c) <= 0xEF)
+# 4. mojibake / corrupt scan over a configured HTML file, if one is present.
+# The path is deployment-specific and comes from the environment.
+_scan = os.environ.get("RUTH_MOJIBAKE_SCAN", "")
+if _scan and os.path.exists(_scan):
+    try:
+        _txt = open(_scan, encoding="utf-8").read()
+        results["mojibake_remaining"] = sum(1 for c in _txt if 0xE0 <= ord(c) <= 0xEF)
+    except OSError:
+        results["mojibake_remaining"] = "unreadable"
 else:
-    results["mojibake_remaining"] = "n/a (private-app not cloned)"
+    results["mojibake_remaining"] = "n/a (no RUTH_MOJIBAKE_SCAN target)"
+results["cloned_repos"] = os.environ.get("RUTH_CLONED_REPOS", "none")
 # 5. version
 for _bin in (f"{HOME}/.opencode/bin/opencode", "opencode"):
     try:
@@ -294,17 +329,29 @@ def gh_jobs(repo, wf_sha=None, n=6):
         if name in out: continue
         out[name] = run.get("conclusion")
     return out
-fw = gh_jobs("private-repo")
-results["ruth_maintenance"] = fw.get("Ruth Foundation Maintenance", "n/a")
-results["ruth_verification"] = fw.get("Ruth Foundation Verification", "n/a")
-# 8. secrets on private-app (bridge gating)
-r = curl_json("https://api.github.com/repos/{OWNER}/private-app-pwa/actions/secrets",
-              [f"Authorization: Bearer {GH_KEY}",
-               "Accept: application/vnd.github+json",
-               "X-GitHub-Api-Version: 2022-11-28"])
-secrets = sorted(s["name"] for s in r.get("secrets", [])) if r and "secrets" in r else []
-bridge_needed = ["SHOPIFY_STORE_DOMAIN", "SHOPIFY_ADMIN_TOKEN", "GEMINI_API_KEY"]
-results["bridge_secrets"] = [s for s in bridge_needed if s not in secrets]
+# Which private repo/workflows to inspect is deployment-specific.
+_ci_repo = os.environ.get("RUTH_CI_REPO", "")
+if _ci_repo:
+    _fw = gh_jobs(_ci_repo)
+    results["ruth_maintenance"] = _fw.get(os.environ.get("RUTH_CI_MAINTENANCE_JOB", ""), "n/a")
+    results["ruth_verification"] = _fw.get(os.environ.get("RUTH_CI_VERIFY_JOB", ""), "n/a")
+else:
+    results["ruth_maintenance"] = "n/a (RUTH_CI_REPO unset)"
+    results["ruth_verification"] = "n/a (RUTH_CI_REPO unset)"
+# 8. optional: are a deployment's required CI secrets present? The repo and
+# the secret names are supplied by the environment; nothing project-specific is
+# named here, and an unset config means the check does not apply.
+_secrets_repo = os.environ.get("RUTH_SECRETS_REPO", "")
+_needed = [x for x in os.environ.get("RUTH_REQUIRED_SECRETS", "").split(",") if x]
+if _secrets_repo and _needed:
+    r = curl_json(f"https://api.github.com/repos/{_secrets_repo}/actions/secrets",
+                  [f"Authorization: Bearer {GH_KEY}",
+                   "Accept: application/vnd.github+json",
+                   "X-GitHub-Api-Version: 2022-11-28"])
+    _have = sorted(x["name"] for x in r.get("secrets", [])) if r and "secrets" in r else []
+    results["bridge_secrets"] = [x for x in _needed if x not in _have]
+else:
+    results["bridge_secrets"] = "n/a (RUTH_SECRETS_REPO / RUTH_REQUIRED_SECRETS unset)"
 
 # 9. push memory to GitHub (canonical store). Keys are read from auth.json,
 # never hardcoded, so nothing sensitive touches the repo.
@@ -383,7 +430,7 @@ survives context resets and is consulted at the start of every session.
 - Machine: {results.get('machine_info', 'Unknown')}
 - Home: {results.get('home_dir', f"{HOME}")}
 - Config root: {results.get('config_root', f"{CFG_ROOT}")}
-- Repos (cloned, shallow): gitwork/private-repo, gitwork/private-app-pwa; opencode fork NOT cloned (514 MB, disk rule)
+- Cloned repos: {results.get("cloned_repos", "none tracked here")}
 
 ## Memory architecture (GitHub first, computer second)
 - GitHub (canonical): {OWNER}/opencode-identity -> memory/{'{IDENTITY,AGENT_STATE,WORKLOG,ERROR_LOG}'}.md
@@ -427,8 +474,8 @@ survives context resets and is consulted at the start of every session.
 - Diagnostics tools (LSP replacement): {results["diagnostics_tools"]}
 - Doctor timer: {results["doctor_timer"]}
 - Logrotate timer: {results["logrotate_timer"]}
-- the agent maintenance: {results.get('ruth_maintenance', 'unknown')}
-- the agent verification: {results.get('ruth_verification', 'unknown')}
+- Maintenance: {results.get('ruth_maintenance', 'unknown')}
+- Verification: {results.get('ruth_verification', 'unknown')}
 
 ## Source Information
 - Generated by opencode-doctor at {ts}

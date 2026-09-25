@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # memory CLI — Bash wrapper over GitHub contents API for the memory workspace
-# Repository: OWNER/memory (workspace root)
+# Repository: $RUTH_MEMORY_REPO (default $RUTH_OWNER/memory). The owner's
+# private memory repository is deployment-specific and is never named here.
 # Token: ~/.github_token (0600, never committed)
 
 set -euo pipefail
 
 TOKEN_FILE="${HOME}/.github_token"
-REPO="OWNER/memory"
+# Deployment values live on this machine, never in the public repo.
+RUTH_ENV_FILE="${RUTH_ENV_FILE:-$HOME/.config/opencode/ruth.env}"
+[ -f "$RUTH_ENV_FILE" ] && . "$RUTH_ENV_FILE"
+
+REPO="${RUTH_MEMORY_REPO:-${RUTH_OWNER:-owner}/memory}"
 API="https://api.github.com/repos/${REPO}/contents"
 AUTH_HEADER="Authorization: Bearer $(cat "$TOKEN_FILE")"
 

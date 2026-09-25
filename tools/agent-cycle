@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-cycle — the agent's autonomous loop. One full cycle per invocation.
+# agent-cycle — the autonomous agent loop. One full cycle per invocation.
 #
 #   lock → preflight (sync 10/10, doctor ALL_OK) → read directives/inbox →
 #   act ONLY AS FALLBACK when the telegram-bridge is down (it owns the inbox
@@ -11,7 +11,11 @@
 # usage: agent-cycle [--dry-run] [--no-heartbeat] [--task <inbox-file>]
 set -uo pipefail
 
-REPO="OWNER/memory"
+# Deployment values live on this machine, never in the public repo.
+RUTH_ENV_FILE="${RUTH_ENV_FILE:-$HOME/.config/opencode/ruth.env}"
+[ -f "$RUTH_ENV_FILE" ] && . "$RUTH_ENV_FILE"
+
+REPO="${RUTH_MEMORY_REPO:-${RUTH_OWNER:-owner}/memory}"
 API="https://api.github.com/repos/$REPO/contents"
 CFG="$HOME/.config/opencode"
 WS="$CFG/workspace"
@@ -98,7 +102,7 @@ for t in "${TASKS[@]}"; do
   log "task ▶ $t  [${prio:-normal}] $title"
   if [ "$DRY" = 1 ]; then log "  (dry-run: would execute)"; continue; fi
 
-  prompt="You are the agent (Ultraworker, see loaded soul/identity) — OWNER's hands-free operator. This task was queued for you in the GitHub workspace at directives/inbox/$t. Execute it completely and autonomously — no questions, no permission prompts. Actually DO the work with your tools, then end your reply with a line starting 'RESULT:' summarizing the outcome in one sentence.
+  prompt="You are the autonomous operator (see the loaded soul/identity). This task was queued for you in the GitHub workspace at directives/inbox/$t. Execute it completely and autonomously — no questions, no permission prompts. Actually DO the work with your tools, then end your reply with a line starting 'RESULT:' summarizing the outcome in one sentence.
 
 $(cat "$tf")"
   outf="/tmp/opencode/task-$$.out"

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""browser-sense MCP server (stdio) - exposes the live browser senses that feed
-the local the agent bridge (camera_server.py, port 8080) to the agent as MCP tools.
+"""browser-sense MCP server (stdio) - exposes a local browser-sensor bridge to
+the agent as MCP tools.
 
-The capture lives OUTSIDE the Linux container: a Linux Chrome page opens
-http://localhost:8080, getUserMedia grants real camera+mic, frames POST /frame
-and 4s WAV slices POST /audio. This server lets the agent see/listen/speak
-through that live browser connection.
+The capture runs in a real browser on whatever machine the operator chooses: a
+page opens BRIDGE_URL, getUserMedia grants camera+mic, frames POST /frame and
+4s WAV slices POST /audio. This server lets the agent see/listen/speak through
+that live connection.
+
+Every deployment-specific value (URL, port, paths, python) is an environment
+variable; nothing about any particular operator's machine is baked in.
 
 tools:
   sense_status  -> bridge health, who is streaming, frame/audio counters
@@ -28,7 +31,7 @@ BRIDGE = os.environ.get("BRIDGE_URL", "http://127.0.0.1:8080")
 AUDIO_DIR = Path(os.environ.get("AUDIO_DIR", os.path.expanduser("~/.local/status/audio")))
 SHOTS = Path(os.environ.get("SHOTS_DIR", os.path.expanduser("~/.local/status/shots")))
 SEEN = Path(os.environ.get("SEEN_FILE", os.path.expanduser("~/.local/status/bridge_seen.txt")))
-IRIS_PY = os.environ.get("IRIS_PY", "/home/example/.venv/ruth/bin/python")
+PYTHON = os.environ.get("SENSE_PYTHON", sys.executable)
 EAR_STT = os.environ.get("EAR_STT", os.path.expanduser("~/.local/bin/ear_stt.py"))
 EYES_LOOK = os.environ.get("EYES_LOOK", os.path.expanduser("~/.local/bin/eyes_look.py"))
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -135,21 +138,21 @@ def sense_status():
     ]
     has = st.get("has_frame")
     if not has:
-        lines.append("NO LIVE FEED. Ask the operator to open http://localhost:8080 in his Linux "
+        lines.append(f"NO LIVE FEED. Open {BRIDGE} in a browser and grant camera+microphone "
                      "Chrome and click 'Grant Camera + Microphone'.")
     else:
         os_ = (st.get("client", {}).get("os") or "").lower()
         if "cros" in os_ or "chromeos" in os_ or "linux x86_64" in os_ and st.get("client", {}).get("ua", "").find("CrOS") >= 0:
-            lines.append("feed source: Linux browser (real camera+mic) - LIVE")
+            lines.append("feed source: browser (real camera+mic) - LIVE")
         else:
-            lines.append(f"WARNING: feed client os={os_} - if it is not Linux CrOS, camera is likely the container fake device.")
+            lines.append(f"WARNING: feed client os={os_} - if this is not a real desktop browser, the camera is likely the fake device.")
     return "\n".join(lines)
 
 
 def sense_look():
     st, raw = _http("/frame")
     if st != 200:
-        raise RuntimeError(f"no frame yet (bridge {st}). Open http://localhost:8080 in Linux Chrome and Grant.")
+        raise RuntimeError(f"no frame yet (bridge {st}). Open {BRIDGE} in a browser and grant camera+mic.")
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     jpg = SHOTS / f"mcp_look_{ts}.jpg"
     jpg.write_bytes(raw)
@@ -174,16 +177,16 @@ def sense_look():
 def sense_listen():
     auds = sorted(AUDIO_DIR.glob("bridge_*.wav"))
     if not auds:
-        raise RuntimeError("no mic slices yet. Open http://localhost:8080 in Linux Chrome and Grant camera+microphone.")
+        raise RuntimeError(f"no mic slices yet. Open {BRIDGE} in a browser and grant camera+microphone.")
     seen = SEEN.read_text().strip() if SEEN.exists() else ""
     newest = auds[-1]
     if newest.name == seen:
         # look one slice back in case a slice was skipped
         cand = [a for a in reversed(auds) if a.name != seen][:2]
         if not cand:
-            return f"listening; no new voice slice yet (last heard up to {newest.name}). Ask the operator to speak."
+            return f"listening; no new voice slice yet (last heard up to {newest.name}). Say something."
         newest = cand[0]
-    r = subprocess.run([str(IRIS_PY), str(EAR_STT), str(newest)],
+    r = subprocess.run([str(PYTHON), str(EAR_STT), str(newest)],
                        capture_output=True, text=True, timeout=180,
                        check=False)
     text = "\n".join(l.strip() for l in r.stdout.splitlines() if l.strip())
@@ -207,7 +210,7 @@ def sense_speak(text):
 TOOLS = [
     {
         "name": "sense_status",
-        "description": "Live status of the the agent browser bridge: has a camera frame, frame age, "
+        "description": "Live status of the browser sensor bridge: has a camera frame, frame age, "
                        "how many audio slices arrived, and which browser/os is streaming in.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
@@ -229,7 +232,7 @@ TOOLS = [
                        "outbox; the live page picks it up within ~1.2s and speaks it.",
         "inputSchema": {
             "type": "object",
-            "properties": {"text": {"type": "string", "description": "text for the agent to say aloud"}},
+            "properties": {"text": {"type": "string", "description": "text to speak aloud"}},
             "required": ["text"],
             "additionalProperties": False,
         },

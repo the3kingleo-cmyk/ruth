@@ -6,7 +6,11 @@
 # Exit 0 only when every file was fetched (HTTP 200). Anything less = stale soul = do not act.
 set -uo pipefail
 
-REPO="OWNER/memory"
+# Deployment values live on this machine, never in the public repo.
+RUTH_ENV_FILE="${RUTH_ENV_FILE:-$HOME/.config/opencode/ruth.env}"
+[ -f "$RUTH_ENV_FILE" ] && . "$RUTH_ENV_FILE"
+
+REPO="${RUTH_MEMORY_REPO:-${RUTH_OWNER:-owner}/memory}"
 CFG="$HOME/.config/opencode"
 WS="$CFG/workspace"
 TOKEN_FILE="$HOME/.github_token"
