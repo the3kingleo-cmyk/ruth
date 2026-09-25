@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# research — Ruth's deep-dive research loop.
+#
+#   research new <topic> [focus...]   scaffold a brief under research/<slug>/
+#   research plan                     print the active brief (which questions the agent will answer)
+#   research note "finding (source)"  append a finding to the active brief's findings.md
+#   research report                   finalize: emit research/<slug>/report.md with citations
+#   research list                     list briefs
+#
+# Workspace: GitHub (memory repo). Drafts live on disk at ~/.local/status/research/
+# but the REPORT is pushed to the memory repo research/ so GitHub is source of truth.
+set -uo pipefail
+ST="$HOME/.local/status"
+RDST="$ST/research"
+MEM="$HOME/.local/bin/memory"
+mkdir -p "$RDST"
+
+slug() { echo "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/--*/-/g;s/^-//;s/-$//' | cut -c1-40; }
+
+cmd="${1:-list}"; shift || true
+case "$cmd" in
+  new)
+    topic="$1"
+    s=$(slug "$topic")
+    [ -d "$RDST/$s" ] && { echo "brief already exists: $s"; exit 1; }
+    mkdir -p "$RDST/$s"
+    printf '# BRIEF: %s\nslug: %s\ndate: %s\n\n## Goal\n%s\n\n## Questions\n- \n\n## Sources\n- \n\n## Findings\n\n' \
+      "$topic" "$s" "$(date -u +%Y-%m-%d)" "$topic" > "$RDST/$s/brief.md"
+    echo "brief: $RDST/$s/brief.md"
+    echo "research loop: I deep-search each question, you append via 'research note'."
+    ;;
+  note)
+    s="${1:-}"
+    txt="${*:2}"
+    [ -z "$s" ] && { echo "usage: research note <slug> \"finding (source)\""; exit 1; }
+    [ -d "$RDST/$s" ] || { echo "no such brief: $s"; exit 1; }
+    printf -- '- %s:: %s\n' "$(date -u +%H:%M)" "$txt" >> "$RDST/$s/brief.md"
+    echo "appended"
+    ;;
+  report)
+    s="${1:-}"
+    [ -z "$s" ] && s=$(ls -t "$RDST" 2>/dev/null | head -1)
+    [ -n "$s" ] && [ -d "$RDST/$s" ] || { echo "no brief to report"; exit 1; }
+    if ! command -v pandoc >/dev/null 2>&1; then
+      cp "$RDST/$s/brief.md" "$RDST/$s/report.md"
+      echo "report: $RDST/$s/report.md (raw brief; pandoc not present)"
+    else
+      pandoc -s -o "$RDST/$s/report.md" "$RDST/$s/brief.md" && echo "report: $RDST/$s/report.md"
+    fi
+    # push to GitHub workspace (memory repo / research/)
+    cat "$RDST/$s/report.md" | "$MEM" put "research/$s/report.md" -m "deep-research report: $s" && echo "pushed: research/$s/report.md (memory repo)"
+    ;;
+  plan) s="${1:-}"; s=${s:-$(ls -t "$RDST" 2>/dev/null | head -1)}; [ -n "$s" ] && cat "$RDST/$s/brief.md" || echo "no briefs yet";;
+  list) ls -1 "$RDST" 2>/dev/null | head || echo "no briefs yet";;
+  *) echo "usage: research new|note|report|plan|list";;
+esac

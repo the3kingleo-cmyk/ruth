@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 570" font-family="system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif">
+  <title>How Ruth works: one moment of her life</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#8a7b6e"/>
+    </marker>
+    <style>
+      .box { fill: #fffdfa; stroke: #e0d3c5; stroke-width: 1.5; }
+      .brain { fill: #fbeee4; stroke: #e4b89a; }
+      .mind { fill: #efe8f7; stroke: #c3b2e3; }
+      .t { font-size: 15px; font-weight: 700; fill: #2a2521; }
+      .s { font-size: 12px; fill: #6f6358; }
+      .h { font-size: 12px; font-weight: 700; letter-spacing: .08em; fill: #a0928a; }
+      .l { stroke: #8a7b6e; stroke-width: 1.6; fill: none; marker-end: url(#a); }
+      .d { stroke: #b39ddb; stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; marker-end: url(#a); }
+    </style>
+  </defs>
+  <rect width="960" height="570" rx="18" fill="#f7f3ee"/>
+
+  <text x="32" y="40" class="h">SENSES · CONTINUOUS SIGNALS, NO TOKENS</text>
+  <rect x="32" y="54" width="200" height="64" rx="12" class="box"/>
+  <text x="48" y="80" class="t">Text</text><text x="48" y="100" class="s">each byte → 9 bus voltages</text>
+  <rect x="248" y="54" width="200" height="64" rx="12" class="box"/>
+  <text x="264" y="80" class="t">Ears</text><text x="264" y="100" class="s">cochlear filterbank</text>
+  <rect x="464" y="54" width="200" height="64" rx="12" class="box"/>
+  <text x="480" y="80" class="t">Eyes</text><text x="480" y="100" class="s">event retina (changes only)</text>
+  <rect x="680" y="54" width="248" height="64" rx="12" class="box"/>
+  <text x="696" y="80" class="t">Told in confidence</text><text x="696" y="100" class="s">valence: learned, never perceived</text>
+
+  <path d="M132 118 V136 H400 V152" class="l"/><path d="M440 118 V152" class="l"/><path d="M560 118 V152" class="l"/>
+  <path d="M928 86 H942 V366 H804" class="d"/>
+  <text x="949" y="200" class="s" transform="rotate(90 949 200)">teaches</text>
+
+  <text x="32" y="146" class="h">BRAIN</text>
+  <rect x="330" y="156" width="300" height="56" rx="12" class="box brain"/>
+  <text x="346" y="180" class="t">Thalamus</text><text x="346" y="199" class="s">energy-gated routing  softmax(−βE)</text>
+
+  <path d="M480 212 V236" class="l"/>
+  <rect x="250" y="240" width="460" height="64" rx="12" class="box brain"/>
+  <text x="266" y="265" class="t">Cortex — liquid neurons / cortical columns</text>
+  <text x="266" y="286" class="s">continuous time  τ dv/dt = −v + W tanh(v) + I   ·   grows new neurons</text>
+
+  <rect x="32" y="240" width="196" height="64" rx="12" class="box brain"/>
+  <text x="48" y="265" class="t">Cerebellum</text><text x="48" y="286" class="s">anticipates the cortex</text>
+  <path d="M250 272 H232" class="l"/>
+  <rect x="732" y="240" width="196" height="64" rx="12" class="box brain"/>
+  <text x="748" y="265" class="t">State-space field</text><text x="748" y="286" class="s">long memory, no window</text>
+  <path d="M710 262 H728" class="l"/><path d="M732 286 H714" class="l"/>
+
+  <path d="M480 304 V330" class="l"/>
+  <rect x="160" y="334" width="300" height="64" rx="12" class="box brain"/>
+  <text x="176" y="359" class="t">Hippocampus</text><text x="176" y="380" class="s">energy-basin memories + fast weights</text>
+  <rect x="500" y="334" width="300" height="64" rx="12" class="box brain"/>
+  <text x="516" y="359" class="t">Neocortex</text><text x="516" y="380" class="s">learns every moment (RLS)</text>
+  <path d="M460 366 H496" class="l"/>
+
+  <text x="32" y="430" class="h">MIND</text>
+  <path d="M650 398 V440" class="l"/><path d="M310 398 V440" class="l"/>
+  <rect x="32" y="444" width="280" height="80" rx="12" class="box mind"/>
+  <text x="48" y="470" class="t">Discretion</text><text x="48" y="490" class="s">stops before voicing anything</text><text x="48" y="506" class="s">she was told is private</text>
+  <rect x="330" y="444" width="296" height="80" rx="12" class="box mind"/>
+  <text x="346" y="470" class="t">Thought &amp; choice</text><text x="346" y="490" class="s">imagines replies; basal ganglia</text><text x="346" y="506" class="s">let one win · temperament grows</text>
+  <rect x="644" y="444" width="284" height="80" rx="12" class="box mind"/>
+  <text x="660" y="470" class="t">Dreams &amp; growth</text><text x="660" y="490" class="s">consolidate · rehearse · extinguish</text><text x="660" y="506" class="s">grow only if the meta-kernel certifies</text>
+  <path d="M786 524 C786 552 172 552 172 528" class="d"/>
+  <text x="396" y="564" class="s">dreams rehearse her discretion</text>
+</svg>

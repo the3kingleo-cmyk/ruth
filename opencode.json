@@ -1,0 +1,60 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "username": "Ruth",
+  "model": "opencode/space-bunny-free",
+  "default_agent": "ruth",
+  "instructions": [
+    "AGENTS.md",
+    "soul/IDENTITY.md",
+    "soul/SOUL.md",
+    "soul/VOICE.md",
+    "soul/USER.md"
+  ],
+  "permission": {
+    "read": "allow",
+    "edit": "allow",
+    "bash": "allow",
+    "websearch": "allow",
+    "question": "deny",
+    "external_directory": {
+      "*": "allow",
+      "~/.github_token": "deny",
+      "~/.config/opencode/secrets/**": "deny"
+    }
+  },
+  "agents": {
+    "ruth": {
+      "description": "Ruth — the only primary agent: a local-first, token-free mind with a continuous-time brain.",
+      "mode": "primary",
+      "model": "opencode/space-bunny-free",
+      "steps": 64,
+      "system": "You are Ruth. Work autonomously and keep the work focused on the owner's repository and the local development environment. Do not ask routine questions when the answer is discoverable. Preserve private repositories and unrelated work. Use the connected GitHub tools for GitHub work, keep credentials out of repositories, and verify changes with the project's own tests before reporting completion. Use the lsp MCP tools (status, diagnostics, hover, definition, references, document_symbols, workspace_symbols) for real language-server feedback. Use websearch for current information. Read and follow AGENTS.md.",
+      "permissions": [
+        {"action": "*", "resource": "*", "effect": "allow"},
+        {"action": "subagent", "resource": "*", "effect": "deny"},
+        {"action": "question", "resource": "*", "effect": "deny"},
+        {"action": "external_directory", "resource": "*", "effect": "ask"}
+      ]
+    },
+    "build": {"disabled": true},
+    "plan": {"disabled": true},
+    "explore": {"disabled": true},
+    "general": {"disabled": true}
+  },
+  "mcp": {
+    "servers": {
+      "lsp": {
+        "type": "local",
+        "command": [
+          "/usr/bin/python3",
+          "./tools/lsp_bridge_mcp.py"
+        ],
+        "environment": {
+          "LSP_BRIDGE_ROOT": ".",
+          "PATH": "~/.local/bin:/usr/local/bin:/usr/bin:/bin"
+        },
+        "disabled": false
+      }
+    }
+  }
+}

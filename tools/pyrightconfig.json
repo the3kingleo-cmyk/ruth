@@ -1,0 +1,8 @@
+{
+  "venvPath": "/home/example/.venv",
+  "venv": "ruth",
+  "typeCheckingMode": "standard",
+  "reportOptionalMemberAccess": true,
+  "reportArgumentType": true,
+  "reportUnboundVariable": true
+}

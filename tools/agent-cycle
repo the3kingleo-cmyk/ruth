@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# agent-cycle — the agent's autonomous loop. One full cycle per invocation.
+#
+#   lock → preflight (sync 10/10, doctor ALL_OK) → read directives/inbox →
+#   act ONLY AS FALLBACK when the telegram-bridge is down (it owns the inbox
+#   and drains it instantly while running) → push state → agent heartbeat → unlock
+#
+# GitHub is the workspace (FIRST); this box is the worker (SECOND).
+# Idle cycle cost ≈ 12 API calls, ~6 s. Safe to run every 30 min.
+#
+# usage: agent-cycle [--dry-run] [--no-heartbeat] [--task <inbox-file>]
+set -uo pipefail
+
+REPO="OWNER/memory"
+API="https://api.github.com/repos/$REPO/contents"
+CFG="$HOME/.config/opencode"
+WS="$CFG/workspace"
+TOKEN_FILE="$HOME/.github_token"
+LOCK="/tmp/opencode/agent-cycle.lock"
+LOG="$CFG/agent-cycle.log"
+TASK_TIMEOUT="${TASK_TIMEOUT:-1500}"      # 25 min per task
+DOCTOR_MAX_AGE="${DOCTOR_MAX_AGE:-5400}"  # re-run doctor if ledger older than 90 min
+DRY=0; HB=1; ONLY=""
+
+for a in "$@"; do case "$a" in
+  --dry-run) DRY=1;; --no-heartbeat) HB=0;; --task) shift; ONLY="${1:-}";; esac; done
+
+mkdir -p /tmp/opencode "$WS/directives/inbox"
+exec 9>"$LOCK"; flock -n 9 || { echo "agent-cycle: another cycle is running"; exit 0; }
+
+KEY=$(tr -d '[:space:]' < "$TOKEN_FILE" 2>/dev/null); [ -n "$KEY" ] || { echo "ERR: no token"; exit 1; }
+ts()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
+log() { printf '%s %s\n' "$(ts)" "$*" | tee -a "$LOG"; }
+gh()  { curl -s --max-time 30 -H "Authorization: Bearer $KEY" -H "Accept: application/vnd.github+json" -H "User-Agent: agent-cycle" "$@"; }
+gh_get_raw() { gh -H "Accept: application/vnd.github.raw+json" "$API/$1"; }
+gh_sha()     { gh "$API/$1" | jq -r '.sha // empty'; }
+gh_put() {   # gh_put <path> <localfile> <message>
+  local sha; sha=$(gh_sha "$1")
+  local body; body=$(python3 -c 'import json,base64,sys;print(json.dumps({"message":sys.argv[1],"content":base64.b64encode(open(sys.argv[2],"rb").read()).decode(),**({"sha":sys.argv[3]} if sys.argv[3] else {})}))' "$3" "$2" "$sha")
+  local code; code=$(gh -o /dev/null -w '%{http_code}' -X PUT "$API/$1" -d "$body"); [[ "$code" =~ ^20[01]$ ]]
+}
+gh_del() {   # gh_del <path> <message>
+  local sha; sha=$(gh_sha "$1"); [ -n "$sha" ] || return 0
+  local code; code=$(gh -o /dev/null -w '%{http_code}' -X DELETE "$API/$1" -d "{\"message\":\"$2\",\"sha\":\"$sha\"}"); [ "$code" = 200 ]
+}
+worklog() {  # worklog <action> <target> <result>
+  printf -- '- %s | %s | %s | %s\n' "$(ts)" "$1" "$2" "$3" >> "$CFG/WORKLOG.md"
+}
+
+log "── cycle start (dry=$DRY)"
+
+# ── 1. preflight: soul must be current ──────────────────────────────────────
+if ! out=$("$HOME/.local/bin/opencode-sync" 2>&1); then
+  log "PREFLIGHT FAIL: workspace sync incomplete"; echo "$out" | tail -3 | tee -a "$LOG"
+  worklog "agent-cycle" "preflight" "FAIL sync"; exit 2
+fi
+log "sync: $(echo "$out" | tail -1)"
+
+# ── 2. preflight: health must be ALL_OK (use ledger if fresh, else re-run) ──
+age=$(( $(date +%s) - $(stat -c %Y "$CFG/AGENT_STATE.md" 2>/dev/null || echo 0) ))
+if [ "$age" -gt "$DOCTOR_MAX_AGE" ] || ! grep -q "ALL_OK=True" "$CFG/AGENT_STATE.md" 2>/dev/null; then
+  log "doctor: ledger stale (${age}s) or not OK — running"
+  dout=$(python3 "$CFG/doctor.py" 2>&1)
+  echo "$dout" | grep -q "ALL_OK=True" || { log "PREFLIGHT FAIL: doctor"; echo "$dout" | grep -E "False|ALL_OK" | tee -a "$LOG"; worklog "agent-cycle" "preflight" "FAIL doctor"; exit 3; }
+fi
+log "doctor: ALL_OK"
+
+# ── 3. inbox ────────────────────────────────────────────────────────────────
+mapfile -t TASKS < <(gh "$API/directives/inbox" | jq -r '.[]? | select(.type=="file" and .name!="README.md") | .name' | sort)
+[ -n "$ONLY" ] && TASKS=("$ONLY")
+if [ ${#TASKS[@]} -eq 0 ]; then
+  log "inbox: empty"
+else
+  log "inbox: ${#TASKS[@]} task(s): ${TASKS[*]}"
+fi
+
+# ── 4. act ──────────────────────────────────────────────────────────────────
+# The telegram-bridge (always-running daemon) owns the inbox while it is up:
+# claim inbox → running → execute → done, drained on EVERY poll cycle (~1-50s),
+# so tasks never wait for this 30-min cycle. agent-cycle only drains the inbox
+# as a FALLBACK when the bridge is down — never racing the instant processor.
+done_n=0; fail_n=0
+BRIDGE_ACTIVE=0
+command -v systemctl >/dev/null 2>&1 && \
+  [ "$(systemctl --user is-active telegram-bridge.service 2>/dev/null)" = "active" ] && \
+  BRIDGE_ACTIVE=1
+if [ "$BRIDGE_ACTIVE" = 1 ] && [ ${#TASKS[@]} -gt 0 ] && [ -z "$ONLY" ]; then
+  log "inbox: ${#TASKS[@]} task(s) deferred to active telegram-bridge (instant): ${TASKS[*]}"
+  log "agent-cycle: state + heartbeat only (bridge is the inbox processor)"
+else
+  [ "$BRIDGE_ACTIVE" = 0 ] && [ ${#TASKS[@]} -gt 0 ] && \
+    log "inbox: telegram-bridge NOT active — agent-cycle drains as fallback"
+for t in "${TASKS[@]}"; do
+  [ -n "$t" ] || continue
+  tf="$WS/directives/inbox/$t"; gh_get_raw "directives/inbox/$t" > "$tf"
+  [ -s "$tf" ] || { log "task $t: empty fetch, skip"; continue; }
+  title=$(grep -m1 '^# ' "$tf" | sed 's/^# //'); prio=$(grep -m1 -oiE '^priority:\s*\w+' "$tf" | awk '{print tolower($2)}')
+  log "task ▶ $t  [${prio:-normal}] $title"
+  if [ "$DRY" = 1 ]; then log "  (dry-run: would execute)"; continue; fi
+
+  prompt="You are the agent (Ultraworker, see loaded soul/identity) — OWNER's hands-free operator. This task was queued for you in the GitHub workspace at directives/inbox/$t. Execute it completely and autonomously — no questions, no permission prompts. Actually DO the work with your tools, then end your reply with a line starting 'RESULT:' summarizing the outcome in one sentence.
+
+$(cat "$tf")"
+  outf="/tmp/opencode/task-$$.out"
+  start=$(date +%s)
+  timeout "$TASK_TIMEOUT" "$HOME/.opencode/bin/opencode" run ${AGENT_MODEL:+--model "$AGENT_MODEL"} "$prompt" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$outf"; rc=${PIPESTATUS[0]}
+  dur=$(( $(date +%s) - start ))
+  # opencode run exits 0 even when the provider errors — detect from output
+  grep -qE '^Error: \{|"name": "UnknownError"|^Error:' "$outf" && rc=${rc/#0/70}
+  result=$(grep -m1 '^RESULT:' "$outf" | cut -c9- | head -c 300)
+  [ -n "$result" ] || result="(no RESULT line) $(tail -c 200 "$outf" | tr '\n' ' ')"
+
+  if [ "$rc" -eq 0 ]; then dest="done"; done_n=$((done_n+1)); status="ok"
+  else dest="failed"; fail_n=$((fail_n+1)); status="rc=$rc"; fi
+
+  { cat "$tf"; printf '\n\n## result\n- when: %s\n- status: %s (%ss)\n- by: agent-cycle@penguin\n- result: %s\n\n<details><summary>output tail</summary>\n\n```\n%s\n```\n</details>\n' \
+      "$(ts)" "$status" "$dur" "$result" "$(tail -n 60 "$outf")"; } > "$tf.done"
+  gh_put "directives/$dest/$t" "$tf.done" "agent-cycle: $t → $dest ($status)" && gh_del "directives/inbox/$t" "agent-cycle: consumed $t"
+  worklog "task:$t" "directives/$dest" "$status — $result"
+  [ "$dest" = failed ] && printf '\n## %s task failed: %s\n- status: %s\n- result: %s\n- output: see directives/failed/%s\n' "$(ts)" "$t" "$status" "$result" "$t" >> "$CFG/ERROR_LOG.md"
+  log "task ■ $t → $dest ($status, ${dur}s): $result"
+  rm -f "$outf" "$tf.done" "$tf"   # drop the local scratch copy too — it is NOT queued work; ghosts misled us
+done
+fi
+
+# ── 5. push state + session log ────────────────────────────────────────────
+if [ "$DRY" = 0 ]; then
+  for f in WORKLOG.md ERROR_LOG.md; do
+    remote=$(gh_get_raw "state/$f" | md5sum | cut -c1-32); local_=$(md5sum "$CFG/$f" | cut -c1-32)
+    if [ "$remote" != "$local_" ]; then gh_put "state/$f" "$CFG/$f" "agent-cycle: $f" && log "pushed state/$f"; fi
+  done
+  if [ ${#TASKS[@]} -gt 0 ]; then
+    d=$(date -u +%Y-%m-%d); lf="/tmp/opencode/actions-$d.md"
+    gh_get_raw "logs/actions/$d.md" > "$lf" 2>/dev/null; grep -q . "$lf" 2>/dev/null || printf '# actions %s\n\n' "$d" > "$lf"
+    printf -- '- %s agent-cycle: %d done, %d failed — %s\n' "$(ts)" "$done_n" "$fail_n" "${TASKS[*]}" >> "$lf"
+    gh_put "logs/actions/$d.md" "$lf" "agent-cycle: actions $d" && log "pushed logs/actions/$d.md"
+  fi
+fi
+
+# ── 6. agent heartbeat (distinct from the GitHub-side workflow heartbeat) ───
+if [ "$HB" = 1 ] && [ "$DRY" = 0 ]; then
+  hb="/tmp/opencode/heartbeat.md"; gh_get_raw "logs/agent-heartbeat.md" > "$hb"
+  grep -q '^| time' "$hb" || printf '# Agent heartbeat\n\n| time (UTC) | event | by |\n|---|---|---|\n' > "$hb"
+  row="| $(ts) | agent-cycle: inbox=${#TASKS[@]} done=$done_n failed=$fail_n | agent-cycle@penguin |"
+  python3 - "$hb" "$row" << 'EOF'
+import sys
+p, row = sys.argv[1], sys.argv[2]
+L = open(p).read().splitlines()
+i = next((k for k, l in enumerate(L) if l.startswith('|---')), 3)
+rows = [l for l in L[i+1:] if l.startswith('|')]
+open(p, 'w').write('\n'.join(L[:i+1] + [row] + rows[:499]) + '\n')
+EOF
+  gh_put "logs/agent-heartbeat.md" "$hb" "heartbeat: agent-cycle@penguin $(ts)" && log "heartbeat pushed"
+fi
+
+log "── cycle end: inbox=${#TASKS[@]} done=$done_n failed=$fail_n"

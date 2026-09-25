@@ -1,0 +1,10 @@
+{
+  "include": ["ruth", "tests", "tools"],
+  "exclude": ["**/__pycache__", "**/node_modules", "**/.venv", "build", "dist"],
+  "extraPaths": ["/home/the1leo/ruth"],
+  "venvPath": "/home/the1leo/.local/share/opencode/lsp",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportPossiblyUnboundVariable": "none",
+  "reportUnboundVariable": "error"
+}

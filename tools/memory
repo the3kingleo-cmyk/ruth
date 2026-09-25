@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# memory CLI — Bash wrapper over GitHub contents API for the memory workspace
+# Repository: OWNER/memory (workspace root)
+# Token: ~/.github_token (0600, never committed)
+
+set -euo pipefail
+
+TOKEN_FILE="${HOME}/.github_token"
+REPO="OWNER/memory"
+API="https://api.github.com/repos/${REPO}/contents"
+AUTH_HEADER="Authorization: Bearer $(cat "$TOKEN_FILE")"
+
+# status — confirm API auth
+memory_status() {
+    echo "Memory CLI status:"
+    echo "  Repo: $REPO"
+    echo "  API: $API"
+    local user_info
+    user_info=$(curl -s -H "$AUTH_HEADER" https://api.github.com/user | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f'{d.get(\"login\",\"?\")} (id: {d.get(\"id\",\"?\")})')
+" 2>/dev/null)
+    echo "  Auth: $user_info"
+    local rate
+    rate=$(curl -s -H "$AUTH_HEADER" https://api.github.com/rate_limit | python3 -c "
+import json, sys
+d = json.load(sys.stdin).get('resources',{}).get('core',{})
+print(f'{d.get(\"remaining\",0)}/{d.get(\"limit\",0)}')
+" 2>/dev/null)
+    echo "  Rate: $rate"
+}
+
+# tree — list files in the repo
+memory_tree() {
+    local path="${1:-}"
+    local url="${API}"
+    [[ -n "$path" ]] && url="${API}/${path}"
+    curl -s -H "$AUTH_HEADER" "$url" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for f in data:
+    t = 'D' if f.get('type') == 'dir' else 'F'
+    print(f'  {t} {f[\"name\"]}')
+" 2>/dev/null
+}
+
+# get — print file content from repo
+memory_get() {
+    local path="$1"
+    [[ -z "$path" ]] && { echo "Usage: memory get <path>"; exit 1; }
+    curl -s -H "$AUTH_HEADER" "${API}/${path}" | python3 -c "
+import json, sys, base64
+d = json.load(sys.stdin)
+if 'content' in d:
+    print(base64.b64decode(d['content']).decode())
+elif 'message' in d:
+    print('Error: ' + d['message'], file=sys.stderr)
+else:
+    print('Unknown response', file=sys.stderr)
+" 2>/dev/null
+}
+
+# put — create/update file; body from stdin
+memory_put() {
+    local path="$1"
+    local message="${2:-update $path}"
+    [[ -z "$path" ]] && { echo "Usage: memory put <path> [-m <message>]"; exit 1; }
+    
+    # Get current SHA if file exists
+    local sha=""
+    sha=$(curl -s -H "$AUTH_HEADER" "${API}/${path}" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(d.get('sha',''))
+" 2>/dev/null)
+    
+    # Read content from stdin
+    local content
+    content=$(cat | python3 -c "
+import sys, base64
+print(base64.b64encode(sys.stdin.read().encode()).decode())
+")
+    
+    local payload
+    payload=$(PY_MSG="$message" PY_CONTENT="$content" PY_SHA="$sha" python3 -c "
+import json, os
+d = {'message': os.environ['PY_MSG'], 'content': os.environ['PY_CONTENT']}
+if os.environ.get('PY_SHA'):
+    d['sha'] = os.environ['PY_SHA']
+print(json.dumps(d))
+")
+    
+    curl -s -X PUT -H "$AUTH_HEADER" -H "Content-Type: application/json" -d "$payload" "${API}/${path}" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if 'content' in d:
+    print(f'✅ Updated: {d[\"content\"][\"path\"]}')
+elif 'message' in d:
+    print(f'❌ Error: {d[\"message\"]}')
+" 2>/dev/null
+}
+
+# log — append to actions log (fetch existing, then append)
+memory_log() {
+    local note="$1"
+    [[ -z "$note" ]] && { echo "Usage: memory log 'note text'"; exit 1; }
+    local date_slug
+    date_slug=$(date -u +%Y-%m-%d)
+    local timestamp
+    timestamp=$(date -u +%H:%M:%S)
+
+    local line="[${timestamp}] $note"
+    local existing
+    existing=$(memory_get "logs/actions/${date_slug}.md" 2>/dev/null || true)
+    if [[ -n "${existing//[[:space:]]/}" ]]; then
+        printf '%s\n%s\n' "$existing" "$line" | memory_put "logs/actions/${date_slug}.md" "log: $note" 2>/dev/null
+    else
+        printf '%s\n' "$line" | memory_put "logs/actions/${date_slug}.md" "log: $note" 2>/dev/null
+    fi
+    echo "✅ Logged: [$timestamp] $note"
+}
+
+# workflow — trigger GitHub workflow
+memory_workflow() {
+    local name="$1"
+    [[ -z "$name" ]] && { echo "Usage: memory workflow <name>"; exit 1; }
+    curl -s -X POST -H "$AUTH_HEADER" -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/${REPO}/actions/workflows/${name}/dispatches" \
+        -d '{"ref":"main"}' 2>&1
+    echo "✅ Triggered workflow: $name"
+}
+
+# Main
+case "${1:-}" in
+    status) memory_status ;;
+    tree) memory_tree "${2:-}" ;;
+    get) memory_get "${2:-}" ;;
+    put)
+        msg=""
+        path_arg=""
+        while [[ $# -gt 1 ]]; do
+            shift
+            case "$1" in
+                -m) shift; msg="$1" ;;
+                *)
+                    if [[ -z "$path_arg" ]]; then
+                        path_arg="$1"
+                    else
+                        echo "❌ memory put: unexpected positional '$1' (message must use -m '<msg>')" >&2
+                        exit 1
+                    fi
+                    ;;
+            esac
+        done
+        [[ -z "$path_arg" ]] && { echo "Usage: memory put <path> [-m <msg>]"; exit 1; }
+        memory_put "$path_arg" "${msg:-update $path_arg}"
+        ;;
+    log) memory_log "${2:-}" ;;
+    workflow) memory_workflow "${2:-}" ;;
+    *)
+        echo "memory CLI — GitHub workspace manager"
+        echo "Usage: memory <command> [args]"
+        echo ""
+        echo "Commands:"
+        echo "  status              — API auth & rate limit check"
+        echo "  tree [path]         — list repo directory"
+        echo "  get <path>          — print file from repo"
+        echo "  put <path> [-m msg] — write stdin → repo"
+        echo "  log <note>          — append to actions log"
+        echo "  workflow <name>     — trigger workflow dispatch"
+        ;;
+esac

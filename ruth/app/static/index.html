@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ruth</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img src="icon.svg" alt="" width="28" height="28">
+    <div>
+      <h1>Ruth</h1>
+      <p class="sub" id="vitals">waking…</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button id="sleepBtn" class="ghost" title="Let her sleep: consolidate, rehearse, dream, improve">Sleep</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="panel convo" aria-label="Conversation">
+    <div id="log" class="log" aria-live="polite"></div>
+    <details id="thoughts" class="thoughts">
+      <summary>What she considered</summary>
+      <ol id="thoughtList"></ol>
+    </details>
+    <form id="say" class="composer" autocomplete="off">
+      <textarea id="msg" rows="2" placeholder="Talk to her. Wrap anything private in {{ }} or switch on Private." aria-label="Message"></textarea>
+      <div class="row">
+        <label class="toggle" title="Tell her this in confidence. She will learn it and keep it to herself.">
+          <input type="checkbox" id="private"> <span>Private</span>
+        </label>
+        <label class="toggle" title="Hear her vocal tract read her replies (it babbles until trained)">
+          <input type="checkbox" id="voiceOn"> <span>Voice</span>
+        </label>
+        <span class="spacer"></span>
+        <button type="button" id="good" class="ghost small" title="That was good">+</button>
+        <button type="button" id="bad" class="ghost small" title="That was not good">−</button>
+        <button type="submit" class="primary">Send</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel mind" aria-label="Her mind">
+    <h2>Mind</h2>
+    <canvas id="neurons" width="384" height="120" aria-label="Liquid neuron activity"></canvas>
+    <div class="legend"><span id="coreLabel">cortex</span><span id="valence"></span></div>
+    <canvas id="surprise" width="384" height="56" aria-label="Surprise over time"></canvas>
+    <div class="legend"><span>surprise (prediction error)</span><span id="sNow"></span></div>
+    <h3>Temperament</h3>
+    <div id="traits" class="traits"></div>
+    <h3>Memory</h3>
+    <dl id="memory" class="stats"></dl>
+
+    <h2>Senses</h2>
+    <div class="senses">
+      <button id="micBtn" class="ghost">Ears: off</button>
+      <button id="camBtn" class="ghost">Eyes: off</button>
+    </div>
+    <video id="cam" playsinline muted hidden></video>
+    <canvas id="retina" width="32" height="32" hidden></canvas>
+    <p class="note" id="senseNote">Nothing leaves this computer. Sound and light go straight into her senses as signals and are never recorded.</p>
+
+    <h2>Dreams</h2>
+    <div id="dreams" class="dreams"><p class="note">She hasn't slept yet.</p></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# ruth-launch — start Ruth.
+#
+# One command to bring up the whole agent:
+#   1. verify the mind imports and her tests pass
+#   2. make sure the local tools (LSP bridge, doctor) are on PATH
+#   3. launch the surface you asked for
+#
+# Usage:
+#   ./ruth-launch                 # interactive app in the browser
+#   ./ruth-launch app             # same
+#   ./ruth-launch cli             # talk to her in the terminal
+#   ./ruth-launch test            # run the test suite
+#   ./ruth-launch doctor          # health check: tools, LSP, memory, git
+#   ./ruth-launch mcp             # print the MCP server config to install
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE"
+
+BIN="$HOME/.local/bin"
+PY="${PYTHON:-python3}"
+
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+warn() { printf '\033[33m%s\033[0m\n' "$*" >&2; }
+die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+# --- preflight -------------------------------------------------------------
+preflight() {
+  command -v "$PY" >/dev/null 2>&1 || die "python3 not found"
+  if ! "$PY" -c 'import numpy' >/dev/null 2>&1; then
+    # An active venv that simply lacks numpy is a different problem from
+    # running the system interpreter against an installed Ruth. Only warn
+    # when Ruth itself is not importable.
+    if "$PY" -c 'import ruth' >/dev/null 2>&1; then
+      warn "numpy is not importable in the active interpreter ($PY)"
+    else
+      warn "Ruth is not installed for $PY — activate a venv, then: $PY -m pip install -e ."
+    fi
+  fi
+  if [ -x "$BIN/lsp_bridge_mcp.py" ]; then
+    export PATH="$BIN:$PATH"
+  else
+    warn "LSP bridge not installed at $BIN/lsp_bridge_mcp.py"
+    warn "install it with: install -m 0755 tools/lsp_bridge_mcp.py $BIN/"
+  fi
+}
+
+cmd="${1:-app}"
+shift || true
+
+case "$cmd" in
+  test)
+    preflight
+    bold "running Ruth's test suite"
+    exec "$PY" -m pytest tests -q "$@"
+    ;;
+  doctor)
+    preflight
+    if [ -x "$BIN/opencode-doctor.py" ]; then exec "$BIN/opencode-doctor.py" "$@"; fi
+    bold "local tool health"
+    for t in lsp_bridge_mcp.py bridge_mcp.py pyright-langserver; do
+      if command -v "$t" >/dev/null 2>&1 || [ -e "$BIN/$t" ]; then
+        printf '  ok   %s\n' "$t"
+      else
+        printf '  MISS %s\n' "$t"
+      fi
+    done
+    "$PY" -c 'import ruth; print("  ok   ruth", ruth.__version__)'
+    ;;
+  mcp)
+    bold "add this to ~/.config/opencode/opencode.json under mcp.servers:"
+    cat <<'JSON'
+    "lsp": {
+      "type": "local",
+      "command": ["/usr/bin/python3", "/home/you/.local/bin/lsp_bridge_mcp.py"],
+      "environment": {
+        "LSP_BRIDGE_ROOT": "/path/to/this/repo",
+        "PATH": "/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      },
+      "disabled": false
+    }
+JSON
+    ;;
+  cli)
+    preflight
+    exec "$PY" -m ruth "$@"
+    ;;
+  app)
+    preflight
+    exec "$PY" -m ruth app "$@"
+    ;;
+  doctor-py)
+    exec "$PY" tools/doctor.py "$@"
+    ;;
+  -h|--help|help)
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    die "unknown command: $cmd (try: app, cli, test, doctor, mcp)"
+    ;;
+esac
