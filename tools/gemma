@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# gemma — run the local Gemma on this box.
+#
+# A local model for the agent layer, separate from Ruth's own mind: she is
+# token-free by construction and must stay that way (tests/test_token_free.py
+# forbids model runtimes inside ruth/). This lives in the agent's world.
+#
+# Built for this machine: 4 vCPU i3, no GPU, 6.4 GB RAM. gemma-3-4b-it at
+# Q4_K_M is 2.49 GB, which leaves room for context inside 6.4 GB.
+#
+#   gemma serve            start the OpenAI-compatible server on :8077
+#   gemma ask "..."        one-shot completion
+#   gemma status           is it up, what is loaded
+#   gemma stop             stop it
+#   gemma models           what is downloaded
+set -uo pipefail
+
+MODEL_DIR="${RUTH_MODEL_DIR:-$HOME/.local/share/models}"
+PORT="${GEMMA_PORT:-8077}"
+# 4B Q4_K_M on 4 vCPU: -t 4 keeps it responsive, context is capped so the
+# KV cache cannot push the box into swap.
+CTX="${GEMMA_CTX:-4096}"
+THREADS="${GEMMA_THREADS:-4}"
+DEFAULT_MODEL="gemma-3-4b-it-Q4_K_M.gguf"
+SMALL_MODEL="gemma-3-1b-it-Q4_K_M.gguf"
+
+pick_model() {
+  if [ -f "$MODEL_DIR/$DEFAULT_MODEL" ]; then echo "$MODEL_DIR/$DEFAULT_MODEL"
+  elif [ -f "$MODEL_DIR/$SMALL_MODEL" ]; then echo "$MODEL_DIR/$SMALL_MODEL"
+  else echo ""; fi
+}
+
+cmd="${1:-status}"; shift || true
+
+case "$cmd" in
+  serve)
+    m=$(pick_model)
+    [ -n "$m" ] || { echo "no Gemma downloaded. Run: gemma fetch" >&2; exit 1; }
+    exec llama-server -m "$m" --host 127.0.0.1 --port "$PORT" \
+      -c "$CTX" -t "$THREADS" --no-webui "$@"
+    ;;
+  fetch)
+    # The 4B is the one that fits this box; 1B is the floor if 4B is refused.
+    mkdir -p "$MODEL_DIR"
+    base="https://huggingface.co/ggml-org"
+    for f in "$DEFAULT_MODEL" "$SMALL_MODEL"; do
+      if [ -f "$MODEL_DIR/$f" ]; then echo "have $f"; continue; fi
+      repo="${f%%-*}-${f#*-}"; repo="${repo%-Q4_K_M.gguf}-it-GGUF"
+      echo "downloading $f ..."
+      curl -sSL --retry 3 -o "$MODEL_DIR/$f" \
+        "$base/gemma-3-${repo}/resolve/main/$f?download=true" \
+        || { echo "  failed: $f" >&2; rm -f "$MODEL_DIR/$f"; }
+    done
+    ls -la "$MODEL_DIR" | awk 'NR>2{printf "  %-44s %6.2f GB\n",$NF,$5/1e9}'
+    ;;
+  ask)
+    m=$(pick_model)
+    [ -n "$m" ] || { echo "no Gemma downloaded. Run: gemma fetch" >&2; exit 1; }
+    llama-cli -m "$m" -c "$CTX" -t "$THREADS" -n "$*" "$@"
+    ;;
+  status)
+    if curl -sS --max-time 4 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+      echo "gemma: UP on 127.0.0.1:$PORT"
+      curl -sS --max-time 5 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null \
+        | head -c 300; echo
+    else
+      echo "gemma: down (start it with: gemma serve)"
+    fi
+    m=$(pick_model)
+    [ -n "$m" ] && echo "model: $m ($(du -h "$m" | cut -f1))" || echo "model: none downloaded"
+    ;;
+  stop)
+    pkill -f "llama-server.*--port $PORT" && echo "stopped" || echo "not running"
+    ;;
+  models)
+    ls -la "$MODEL_DIR" 2>/dev/null | awk 'NR>2{printf "  %-44s %6.2f GB\n",$NF,$5/1e9}' \
+      || echo "  $MODEL_DIR does not exist yet"
+    ;;
+  *)
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+    ;;
+esac

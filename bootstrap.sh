@@ -25,6 +25,7 @@ VENV="${RUTH_VENV:-$HOME/.local/share/ruth-app}"
 LSP_VENV="$HOME/.local/share/opencode/lsp/pyright-venv"
 NODE_MODS="$HOME/.local/lib/node_modules"
 ENV_FILE="$CFG_DIR/ruth.env"
+LLAMA_SRC="${RUTH_LLAMA_SRC:-$HOME/.local/opt/llama.cpp}"
 PY="${PYTHON:-python3}"
 
 MODE=install
@@ -109,6 +110,8 @@ set -- \
   "websearch_mcp.py:websearch_mcp.py" \
   "acp_mcp.py:acp_mcp.py" \
   "mind_mcp.py:mind_mcp.py" \
+  "ears.py:ears" \
+  "gemma:gemma" \
   "acp-check:acp-check" \
   "bridge_mcp.py:bridge_mcp.py" \
   "doctor.py:opencode-doctor.py" \
@@ -220,6 +223,31 @@ if [ $rc -eq 0 ]; then
   ok "config written atomically"
 else
   die "config step failed (rc=$rc) -- her servers are NOT registered"
+fi
+
+# ---------------------------------------------------------------- 5b. gemma
+# A local model for the agent layer. Separate from Ruth's mind on purpose:
+# she is token-free by construction and tests/test_token_free.py forbids model
+# runtimes inside ruth/. This box is 4 vCPU / 6.4 GB / no GPU, so the target
+# is gemma-3-4b-it at Q4_K_M (2.49 GB), with 1B as the floor.
+say "5b. local model (gemma)"
+if [ -x "$BIN/llama-server" ] || [ -x "$BIN/llamacpp-llama-server" ]; then
+  skip "llama.cpp runtime"
+elif [ "$MODE" = check ]; then
+  miss "llama.cpp runtime"
+else
+  if [ -d "$LLAMA_SRC" ]; then
+    ok "llama.cpp source at $LLAMA_SRC"
+  else
+    warn "no llama.cpp build here; fetch one, or run gemma fetch with a runtime present"
+  fi
+fi
+if [ -n "$(ls -A "$HOME/.local/share/models" 2>/dev/null)" ]; then
+  skip "models in ~/.local/share/models ($(du -sh "$HOME/.local/share/models" 2>/dev/null | cut -f1))"
+elif [ "$MODE" = check ]; then
+  miss "no local model downloaded (gemma fetch)"
+elif [ -x "$BIN/gemma" ]; then
+  "$BIN/gemma" fetch || warn "gemma fetch failed"
 fi
 
 # ---------------------------------------------------------------- 6. agent

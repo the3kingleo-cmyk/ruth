@@ -1,0 +1,105 @@
+"""Tests for the local-model layer: `tools/gemma` and its boundaries.
+
+The point of these is the boundary. Ruth's mind is token-free and offline by
+construction, and tests/test_token_free.py enforces numpy + stdlib inside the
+package. A local LLM is therefore *not* part of her: it belongs to the agent
+layer, lives outside ruth/, and is reached over HTTP. These tests hold that
+line, so a future "just add it to her" does not quietly break her guarantee.
+
+The model itself is a 2.49 GB download; nothing here needs it present.
+"""
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+GEMMA = ROOT / "tools" / "gemma"
+PKG = ROOT / "ruth"
+
+
+class TestGemmaLauncher(unittest.TestCase):
+    def setUp(self):
+        self.text = GEMMA.read_text(encoding="utf-8")
+
+    def test_is_executable_shell(self):
+        self.assertTrue(os.access(GEMMA, os.X_OK), "gemma must be executable")
+        done = subprocess.run(["bash", "-n", str(GEMMA)],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_targets_a_model_that_fits_this_box(self):
+        """6.4 GB RAM, no GPU. Q4_K_M 4B is 2.49 GB; 1B is the floor."""
+        self.assertIn("gemma-3-4b-it-Q4_K_M.gguf", self.text)
+        self.assertIn("gemma-3-1b-it-Q4_K_M.gguf", self.text)
+        self.assertRegex(self.text, r"Q4_K_M",
+                         "Q4_K_M is the quantisation that fits; Q8 does not")
+
+    def test_never_downloads_an_unquantised_model(self):
+        for bad in ("F16.gguf", "-BF16.gguf", "Q2_K", "Q3_K"):
+            self.assertNotIn(bad, self.text,
+                             f"{bad} will not fit in 6.4 GB of RAM")
+
+    def test_caps_context_so_the_kv_cache_cannot_exhaust_ram(self):
+        self.assertRegex(self.text, r"GEMMA_CTX",
+                         "context must be bounded on a 6.4 GB box")
+        m = re.search(r'GEMMA_CTX:-(\d+)', self.text)
+        self.assertIsNotNone(m)
+        self.assertLessEqual(int(m.group(1)), 8192,
+                             "context beyond 8k will not fit here")
+
+    def test_serves_openai_compatible_http(self):
+        """opencode and most harnesses speak OpenAI-shaped HTTP; that is how
+        the agent layer reaches the local model."""
+        self.assertIn("llama-server", self.text)
+        self.assertIn("/v1/models", self.text)
+        self.assertIn("--port", self.text)
+
+    def test_models_live_outside_the_package(self):
+        self.assertIn(".local/share/models", self.text,
+                      "a 2.49 GB model must not sit in the source repo")
+
+    def test_has_a_fallback_when_no_model_is_downloaded(self):
+        """Running `gemma serve` with nothing downloaded must say so, not
+        fail obscurely."""
+        self.assertRegex(self.text, r"gemma fetch")
+
+
+class TestTheBoundaryHolds(unittest.TestCase):
+    """No model runtime may enter ruth/ -- that is her guarantee."""
+
+    def test_nothing_in_the_package_imports_a_model_runtime(self):
+        banned = ("llama_cpp", "llama", "ggml", "transformers", "torch",
+                  "onnxruntime", "ctransformers", "vllm", "gemma", "sentencepiece")
+        for path in PKG.rglob("*.py"):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for mod in banned:
+                self.assertNotRegex(
+                    text, rf"^\s*(import|from)\s+{mod}\b",
+                    f"{path} imports {mod}: her runtime is numpy + stdlib only")
+
+    def test_the_launcher_is_not_inside_the_package(self):
+        self.assertTrue(str(GEMMA).startswith(str(ROOT / "tools")),
+                        "the launcher belongs in tools/, not inside ruth/")
+
+    def test_her_package_never_shells_out_to_a_model(self):
+        for path in PKG.rglob("*.py"):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for token in ("llama-server", "llama-server ", "localhost:8077", "gemma"):
+                self.assertNotIn(token, text,
+                                 f"{path} references the local model: her mind "
+                                 f"must not depend on one")
+
+    def test_the_token_free_suite_still_passes(self):
+        """The real guard, not a paraphrase of it."""
+        done = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/test_token_free.py", "-q"],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout[-2000:])
+
+
+if __name__ == "__main__":
+    unittest.main()
