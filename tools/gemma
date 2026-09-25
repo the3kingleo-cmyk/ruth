@@ -5,8 +5,10 @@
 # token-free by construction and must stay that way (tests/test_token_free.py
 # forbids model runtimes inside ruth/). This lives in the agent's world.
 #
-# Built for this machine: 4 vCPU i3, no GPU, 6.4 GB RAM. gemma-3-4b-it at
-# Q4_K_M is 2.49 GB, which leaves room for context inside 6.4 GB.
+# Built for this machine and measured on it: 4 vCPU i3-10110U, no GPU,
+# 6.4 GB RAM. gemma-3-1b-it at Q4_K_M (0.81 GB) answers a 50-token question
+# in 2.6 s. gemma-3-4b-it (2.49 GB) is downloaded too but measures
+# 0.09-0.59 tokens/s here, so it is opt-in: GEMMA_MODEL=4b gemma serve.
 #
 #   gemma serve            start the OpenAI-compatible server on :8077
 #   gemma ask "..."        one-shot completion
@@ -17,16 +19,24 @@ set -uo pipefail
 
 MODEL_DIR="${RUTH_MODEL_DIR:-$HOME/.local/share/models}"
 PORT="${GEMMA_PORT:-8077}"
-# 4B Q4_K_M on 4 vCPU: -t 4 keeps it responsive, context is capped so the
-# KV cache cannot push the box into swap.
+# -t 4 uses every vCPU; context is capped so the KV cache cannot push a
+# 6.4 GB box into swap.
 CTX="${GEMMA_CTX:-4096}"
 THREADS="${GEMMA_THREADS:-4}"
-DEFAULT_MODEL="gemma-3-4b-it-Q4_K_M.gguf"
-SMALL_MODEL="gemma-3-1b-it-Q4_K_M.gguf"
+# Measured on this box (4 vCPU i3-10110U, no GPU, 6.4 GB):
+#   gemma-3-1b-it Q4 (0.81 GB)  -> 50 tokens in 2.6 s   usable
+#   gemma-3-4b-it Q4 (2.49 GB)  -> 0.09-0.59 tok/s, a 60-token answer
+#                                 exceeds 4 minutes with ~300 MB free
+# So 1B is the default and 4B is opt-in via GEMMA_MODEL=4b. Both are fetched.
+DEFAULT_MODEL="gemma-3-1b-it-Q4_K_M.gguf"
+BIG_MODEL="gemma-3-4b-it-Q4_K_M.gguf"
 
 pick_model() {
+  if [ "${GEMMA_MODEL:-}" = "4b" ] && [ -f "$MODEL_DIR/$BIG_MODEL" ]; then
+    echo "$MODEL_DIR/$BIG_MODEL"; return
+  fi
   if [ -f "$MODEL_DIR/$DEFAULT_MODEL" ]; then echo "$MODEL_DIR/$DEFAULT_MODEL"
-  elif [ -f "$MODEL_DIR/$SMALL_MODEL" ]; then echo "$MODEL_DIR/$SMALL_MODEL"
+  elif [ -f "$MODEL_DIR/$BIG_MODEL" ]; then echo "$MODEL_DIR/$BIG_MODEL"
   else echo ""; fi
 }
 
@@ -40,10 +50,11 @@ case "$cmd" in
       -c "$CTX" -t "$THREADS" --no-webui "$@"
     ;;
   fetch)
-    # The 4B is the one that fits this box; 1B is the floor if 4B is refused.
+    # 1B is the default because it is the one measured to answer here;
+    # the 4B is fetched too so GEMMA_MODEL=4b works on a box with the RAM.
     mkdir -p "$MODEL_DIR"
     base="https://huggingface.co/ggml-org"
-    for f in "$DEFAULT_MODEL" "$SMALL_MODEL"; do
+    for f in "$DEFAULT_MODEL" "$BIG_MODEL"; do
       if [ -f "$MODEL_DIR/$f" ]; then echo "have $f"; continue; fi
       repo="${f%%-*}-${f#*-}"; repo="${repo%-Q4_K_M.gguf}-it-GGUF"
       echo "downloading $f ..."

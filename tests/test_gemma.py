@@ -32,7 +32,7 @@ class TestGemmaLauncher(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
 
     def test_targets_a_model_that_fits_this_box(self):
-        """6.4 GB RAM, no GPU. Q4_K_M 4B is 2.49 GB; 1B is the floor."""
+        """6.4 GB RAM, no GPU. Measured: 1B answers in 2.6s, 4B cannot."""
         self.assertIn("gemma-3-4b-it-Q4_K_M.gguf", self.text)
         self.assertIn("gemma-3-1b-it-Q4_K_M.gguf", self.text)
         self.assertRegex(self.text, r"Q4_K_M",
@@ -103,3 +103,37 @@ class TestTheBoundaryHolds(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheMeasuredChoice(unittest.TestCase):
+    """The default must be the model that was measured to work here.
+
+    Numbers taken from this box (4 vCPU i3-10110U, no GPU, 6.4 GB):
+      gemma-3-1b-it Q4 (0.81 GB) -> 50 tokens in 2.6 s
+      gemma-3-4b-it Q4 (2.49 GB) -> 0.09-0.59 tok/s; a 60-token answer
+                                   exceeded four minutes
+    Shipping the 4B as the default would mean a default that cannot answer.
+    """
+
+    def setUp(self):
+        self.text = (ROOT / "tools" / "gemma").read_text(encoding="utf-8")
+
+    def test_default_is_the_one_that_measured_usable(self):
+        m = re.search(r'^DEFAULT_MODEL="(.+)"$', self.text, re.M)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "gemma-3-1b-it-Q4_K_M.gguf",
+                         "the 4B is downloaded but cannot answer on this box")
+
+    def test_the_4b_is_still_available_opt_in(self):
+        self.assertIn('BIG_MODEL="gemma-3-4b-it-Q4_K_M.gguf"', self.text)
+        self.assertIn('"$MODEL_DIR/$BIG_MODEL"; return', self.text)
+        self.assertIn('[ "${GEMMA_MODEL:-}" = "4b" ]', self.text,
+                         "the 4B must remain reachable as an opt-in")
+
+    def test_both_are_fetched_so_both_are_available(self):
+        self.assertRegex(self.text, r'for f in "\$DEFAULT_MODEL" "\$BIG_MODEL"')
+
+    def test_the_measured_numbers_are_recorded_in_the_file(self):
+        # a future change to the default should have to confront the measurement
+        self.assertIn("2.6 s", self.text)
+        self.assertIn("0.09", self.text)
