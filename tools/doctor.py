@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """opencode-doctor: verify API keys, MCP, config, LSP, timers, corrupt files; update AGENT_STATE.md in place."""
-import json, os, platform, re, subprocess, sys, datetime, base64
+import json, os, platform, re, subprocess, sys, datetime, base64, time
 
 HOME = os.path.expanduser("~")
 CFG_ROOT = os.environ.get("OPENCODE_CONFIG_ROOT", f"{HOME}/.config/opencode")
@@ -100,6 +100,62 @@ s = re.sub(r"(?m)^\s*//.*$", "", raw)          # full-line comments
 s = re.sub(r"(?m)(?<=\s)//\s.*$", "", s)       # inline comments (never "://")
 s = re.sub(r",(?=\s*[}\]])", "", s)           # trailing commas
 cfg = json.loads(s)
+
+
+def mcp_entry(config, name):
+    """Return an MCP server definition from either schema shape.
+
+    opencode v2 registers servers directly under `mcp.<name>`; an older
+    nested form used `mcp.servers.<name>`. Reading only one of the two made
+    this doctor report a healthy bridge as missing (and vice versa), so
+    accept whichever is present.
+    """
+    mcp = config.get("mcp") or {}
+    if not isinstance(mcp, dict):
+        return {}
+    flat = mcp.get(name)
+    if isinstance(flat, dict):
+        return flat
+    nested = mcp.get("servers")
+    if isinstance(nested, dict) and isinstance(nested.get(name), dict):
+        return nested[name]
+    return {}
+
+
+# websearch provider id -> the env var holding its key (opencode's four
+# built-in providers; each needs a key, none work anonymously).
+WS_PROVIDERS = {"exa": "EXA_API_KEY", "firecrawl": "FIRECRAWL_API_KEY",
+                "parallel": "PARALLEL_API_KEY", "tavily": "TAVILY_API_KEY"}
+
+
+def websearch_status(config, env):
+    """Describe websearch readiness without performing a search.
+
+    `enabled` is the config switch, `key` is whether a usable provider
+    credential exists, and `ready` is the only one that predicts whether a
+    search will actually succeed. Keys are read from `env` and never
+    returned — only their presence.
+    """
+    ws = config.get("websearch")
+    if ws is False:
+        return {"websearch_enabled": False, "websearch_provider": "disabled",
+                "websearch_key": False, "websearch_ready": False}
+    if isinstance(ws, dict):
+        enabled = True
+        provider = ws.get("provider") or "random"
+    else:
+        enabled = bool(ws)
+        provider = "default"
+    if provider in WS_PROVIDERS:
+        # A named provider needs that provider's own key.
+        keyed = bool(env.get(WS_PROVIDERS[provider]))
+    else:
+        # "random" / unset needs at least one provider key to choose from.
+        keyed = any(env.get(v) for v in WS_PROVIDERS.values())
+    return {"websearch_enabled": enabled, "websearch_provider": provider,
+            "websearch_key": keyed,
+            "websearch_ready": bool(enabled and keyed)}
+
 results["instructions_loaded"] = all(os.path.exists(p) for p in cfg.get("instructions", [])) and len(cfg.get("instructions", [])) >= 6
 results["compaction_on"] = bool(cfg.get("compaction", {}).get("auto"))
 results["permission_allow"] = cfg.get("permission") == "allow" or (
@@ -118,17 +174,62 @@ if isinstance(_perms, list):
         results["permission_allow"] = True
 # opencode v2 has no built-in LSP client. Real language feedback comes from the
 # `lsp` MCP bridge, so "enabled" means: bridge registered and its servers present.
-_bridge_srv = (cfg.get("mcp", {}).get("servers", {})
-                     .get("lsp", {}))
+# The bridge must also not be explicitly disabled.
+_bridge_srv = mcp_entry(cfg, "lsp")
 results["lsp_bridge_registered"] = bool(_bridge_srv.get("command"))
-results["lsp_enabled"] = bool(results["lsp_bridge_registered"])
-results["mcp_configured"] = bool(
-    # legacy flat form mcp.github.url (v1-style; no longer hot-reloads in v2)
-    cfg.get("mcp", {}).get("github", {}).get("url")
-    # v2 form mcp.servers.<name> (local launcher command or remote url)
-    or bool(cfg.get("mcp", {}).get("servers", {}).get("github", {}).get("command"))
-    or bool(cfg.get("mcp", {}).get("servers", {}).get("github", {}).get("url"))
+results["lsp_enabled"] = bool(
+    results["lsp_bridge_registered"]
+    and _bridge_srv.get("enabled", True) is not False
+    and _bridge_srv.get("disabled", False) is not True
 )
+results["mcp_configured"] = bool(
+    mcp_entry(cfg, "github").get("url")
+    or mcp_entry(cfg, "github").get("command")
+)
+# 3a. Websearch: enabled in config, and a provider key actually present.
+# A provider name without a key is the common half-configured state — the tool
+# is advertised to the model but every search fails at call time, so report
+# the missing key rather than a bare True.
+results.update(websearch_status(cfg, os.environ))
+# 3a-2. ACP: opencode is the Agent Client Protocol server (`opencode acp`).
+# Health = a real `initialize` handshake over stdio returns a result.
+results["acp_ready"] = False
+results["acp_protocol"] = "n/a"
+try:
+    _acp = subprocess.Popen(["opencode", "acp"], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            text=True, bufsize=1)
+    try:
+        _acp.stdin.write(json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1,
+                       "clientCapabilities": {"fs": {"readTextFile": True,
+                                                     "writeTextFile": True},
+                                              "terminal": True}}}) + "\n")
+        _acp.stdin.flush()
+        _deadline = time.time() + 25
+        while time.time() < _deadline:
+            _line = _acp.stdout.readline()
+            if not _line:
+                break
+            if '"id"' not in _line:
+                continue          # skip notifications/other traffic
+            _msg = json.loads(_line)
+            if _msg.get("id") == 1 and "result" in _msg:
+                results["acp_ready"] = True
+                results["acp_protocol"] = _msg["result"].get(
+                    "protocolVersion", "unknown")
+            break
+    finally:
+        _acp.terminate()
+        try:
+            _acp.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _acp.kill()
+except (OSError, ValueError, json.JSONDecodeError):
+    # No `opencode` on PATH or it spoke something unexpected: leave acp_ready
+    # False rather than crashing the whole health check.
+    pass
 # 3b. LSP runtime readiness: node (for spawned server shims) + at least one server bin installed
 try:
     semver = subprocess.run(["node", "--version"], capture_output=True, text=True).stdout.strip()
@@ -304,12 +405,14 @@ survives context resets and is consulted at the start of every session.
 - Zen door (free brain): {results.get("zen_door", False)}
 - GitHub key: {results["github_key"]}
 - LSP enabled: {results["lsp_enabled"]}
+- LSP server ready: {results["lsp_server_ready"]}
 - GitHub MCP: {results["mcp_initialize"]} tools ({results["mcp_tools"]})
+- Websearch: {results["websearch_enabled"]} provider={results["websearch_provider"]} key={results["websearch_key"]} ready={results["websearch_ready"]}
+- ACP: {results["acp_ready"]} (protocol {results["acp_protocol"]})
 - Permission allow: {results["permission_allow"]}
 - MCP configured: {results["mcp_configured"]}
 - Mojibake remaining: {results["mojibake_remaining"]}
 - Node version: {results["node"]}
-- LSP server ready: {results["lsp_server_ready"]}
 - Diagnostics tools (LSP replacement): {results["diagnostics_tools"]}
 - Doctor timer: {results["doctor_timer"]}
 - Logrotate timer: {results["logrotate_timer"]}
