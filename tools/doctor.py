@@ -139,7 +139,7 @@ def websearch_status(config, env):
     ws = config.get("websearch")
     if ws is False:
         return {"websearch_enabled": False, "websearch_provider": "disabled",
-                "websearch_key": False, "websearch_ready": False}
+                "websearch_key": False, "websearch_builtin_ready": False}
     if isinstance(ws, dict):
         enabled = True
         provider = ws.get("provider") or "random"
@@ -154,7 +154,7 @@ def websearch_status(config, env):
         keyed = any(env.get(v) for v in WS_PROVIDERS.values())
     return {"websearch_enabled": enabled, "websearch_provider": provider,
             "websearch_key": keyed,
-            "websearch_ready": bool(enabled and keyed)}
+            "websearch_builtin_ready": bool(enabled and keyed)}
 
 results["instructions_loaded"] = all(os.path.exists(p) for p in cfg.get("instructions", [])) and len(cfg.get("instructions", [])) >= 6
 results["compaction_on"] = bool(cfg.get("compaction", {}).get("auto"))
@@ -190,7 +190,18 @@ results["mcp_configured"] = bool(
 # A provider name without a key is the common half-configured state — the tool
 # is advertised to the model but every search fails at call time, so report
 # the missing key rather than a bare True.
-results.update(websearch_status(cfg, os.environ))
+_ws_status = websearch_status(cfg, os.environ)
+# The built-in tool needs a paid provider key, but a local `websearch` MCP
+# server needs none. Either path makes web search usable, so report the
+# combined readiness rather than failing on a missing key alone.
+_ws_mcp = mcp_entry(cfg, "websearch")
+_ws_status["websearch_mcp_registered"] = bool(_ws_mcp.get("command"))
+_ws_status["websearch_ready"] = bool(
+    _ws_status["websearch_builtin_ready"]
+    or (_ws_status["websearch_mcp_registered"]
+        and _ws_mcp.get("enabled", True) is not False
+        and _ws_mcp.get("disabled", False) is not True))
+results.update(_ws_status)
 # 3a-2. ACP: opencode is the Agent Client Protocol server (`opencode acp`).
 # Health = a real `initialize` handshake over stdio returns a result.
 results["acp_ready"] = False
@@ -407,7 +418,7 @@ survives context resets and is consulted at the start of every session.
 - LSP enabled: {results["lsp_enabled"]}
 - LSP server ready: {results["lsp_server_ready"]}
 - GitHub MCP: {results["mcp_initialize"]} tools ({results["mcp_tools"]})
-- Websearch: {results["websearch_enabled"]} provider={results["websearch_provider"]} key={results["websearch_key"]} ready={results["websearch_ready"]}
+- Websearch: ready={results["websearch_ready"]} (builtin={results["websearch_builtin_ready"]} provider={results["websearch_provider"]} key={results["websearch_key"]}, mcp={results["websearch_mcp_registered"]})
 - ACP: {results["acp_ready"]} (protocol {results["acp_protocol"]})
 - Permission allow: {results["permission_allow"]}
 - MCP configured: {results["mcp_configured"]}

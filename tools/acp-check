@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""acp-check — verify the Agent Client Protocol server and report on it.
+
+opencode is the ACP agent (`opencode acp`); external clients such as Zed
+spawn it over stdio. This script performs a real ACP `initialize` handshake
+against a freshly spawned server and prints what was negotiated, so ACP can be
+confirmed on demand instead of taken on faith.
+
+  acp-check            handshake and report
+  acp-check --serve    run the ACP server on stdio (for an ACP client)
+
+Exit code 0 when the handshake succeeds, 1 otherwise, so it is usable as a
+health check. stdlib only.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+OPENCODE = os.environ.get("OPENCODE_BIN", "opencode")
+TIMEOUT = float(os.environ.get("ACP_CHECK_TIMEOUT", "30"))
+
+INIT = {
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {"protocolVersion": 1,
+               "clientCapabilities": {"fs": {"readTextFile": True,
+                                             "writeTextFile": True},
+                                      "terminal": True}},
+}
+
+
+def handshake():
+    """Spawn the ACP server, send initialize, return (result, error)."""
+    try:
+        p = subprocess.Popen([OPENCODE, "acp"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True, bufsize=1)
+    except (OSError, FileNotFoundError) as exc:
+        return None, f"cannot spawn {OPENCODE} acp: {exc}"
+    try:
+        p.stdin.write(json.dumps(INIT) + "\n")
+        p.stdin.flush()
+        deadline = time.time() + TIMEOUT
+        while time.time() < deadline:
+            line = p.stdout.readline()
+            if not line:
+                return None, "server closed stdout before responding"
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict) or msg.get("id") != 1:
+                continue          # skip notifications / other traffic
+            if "error" in msg:
+                return None, f"initialize error: {json.dumps(msg['error'])}"
+            if "result" in msg:
+                return msg["result"], None
+            return None, f"unexpected frame: {line[:200]}"
+        return None, f"no response within {TIMEOUT:.0f}s"
+    finally:
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+
+
+def main(argv):
+    if "--serve" in argv:
+        # Hand the real stdio straight through to the ACP server.
+        os.execvp(OPENCODE, [OPENCODE, "acp"])
+        return 0
+
+    result, err = handshake()
+    if err:
+        print(f"ACP: DOWN — {err}")
+        print("Fix: ensure `opencode` is on PATH and `opencode acp` starts.")
+        return 1
+
+    caps = result.get("agentCapabilities", {}) or {}
+    info = result.get("agentInfo", {}) or {}
+    print("ACP: UP")
+    print(f"  protocol version: {result.get('protocolVersion')}")
+    print(f"  agent: {info.get('name', '?')} {info.get('version', '')}".rstrip())
+    sess = sorted((caps.get("sessionCapabilities") or {}).keys())
+    if sess:
+        print(f"  session capabilities: {', '.join(sess)}")
+    if caps.get("loadSession"):
+        print("  loadSession: yes")
+    prompt = caps.get("promptCapabilities") or {}
+    bits = [k for k in ("image", "embeddedContext") if prompt.get(k)]
+    if bits:
+        print(f"  prompt capabilities: {', '.join(bits)}")
+    mcp = caps.get("mcpCapabilities") or {}
+    if mcp:
+        on = [k for k, v in mcp.items() if v]
+        print(f"  mcp capabilities: {', '.join(on) if on else 'none'}")
+    auth = [a.get("id") for a in (result.get("authMethods") or []) if a.get("id")]
+    if auth:
+        print(f"  auth methods: {', '.join(auth)}")
+    print("\nConnect an ACP client (e.g. Zed) by launching: opencode acp")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

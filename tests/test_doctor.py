@@ -134,44 +134,44 @@ class TestWebsearchStatus(unittest.TestCase):
         self.assertTrue(r["websearch_enabled"])
         self.assertEqual(r["websearch_provider"], "tavily")
         self.assertFalse(r["websearch_key"])
-        self.assertFalse(r["websearch_ready"])
+        self.assertFalse(r["websearch_builtin_ready"])
 
     def test_named_provider_with_its_key_is_ready(self):
         r = websearch_status({"websearch": {"provider": "tavily"}}, self.KEYED)
-        self.assertTrue(r["websearch_ready"])
+        self.assertTrue(r["websearch_builtin_ready"])
 
     def test_named_provider_ignores_another_providers_key(self):
         # provider=exa but only TAVILY_API_KEY is set -> not ready
         r = websearch_status({"websearch": {"provider": "exa"}}, self.KEYED)
         self.assertFalse(r["websearch_key"])
-        self.assertFalse(r["websearch_ready"])
+        self.assertFalse(r["websearch_builtin_ready"])
 
     def test_random_provider_with_any_key_is_ready(self):
         r = websearch_status({"websearch": {"provider": "random"}}, self.KEYED)
         self.assertEqual(r["websearch_provider"], "random")
-        self.assertTrue(r["websearch_ready"])
+        self.assertTrue(r["websearch_builtin_ready"])
 
     def test_random_provider_without_any_key_is_not_ready(self):
         r = websearch_status({"websearch": {"provider": "random"}}, {})
         self.assertTrue(r["websearch_enabled"])
-        self.assertFalse(r["websearch_ready"])
+        self.assertFalse(r["websearch_builtin_ready"])
 
     def test_disabled_websearch(self):
         r = websearch_status({"websearch": False}, self.KEYED)
         self.assertFalse(r["websearch_enabled"])
         self.assertEqual(r["websearch_provider"], "disabled")
         # a key cannot make a disabled tool ready
-        self.assertFalse(r["websearch_ready"])
+        self.assertFalse(r["websearch_builtin_ready"])
 
     def test_absent_section_defaults_to_random(self):
         r = websearch_status({}, {})
         self.assertEqual(r["websearch_provider"], "default")
-        self.assertFalse(r["websearch_ready"])
+        self.assertFalse(r["websearch_builtin_ready"])
 
     def test_empty_provider_value_treated_as_random(self):
         r = websearch_status({"websearch": {"provider": ""}}, self.KEYED)
         self.assertEqual(r["websearch_provider"], "random")
-        self.assertTrue(r["websearch_ready"])
+        self.assertTrue(r["websearch_builtin_ready"])
 
     def test_secret_value_is_never_returned(self):
         # The doctor pushes this ledger to GitHub, so a key value must never
@@ -191,7 +191,7 @@ class TestWebsearchStatus(unittest.TestCase):
             with self.subTest(provider=prov):
                 r = websearch_status({"websearch": {"provider": prov}},
                                      {var: "k"})
-                self.assertTrue(r["websearch_ready"])
+                self.assertTrue(r["websearch_builtin_ready"])
 
 
 if __name__ == "__main__":
