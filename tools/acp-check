@@ -14,11 +14,32 @@ health check. stdlib only.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 
-OPENCODE = os.environ.get("OPENCODE_BIN", "opencode")
+
+def resolve_opencode():
+    """Find an executable `opencode`, never a directory that shadows it.
+
+    ~/.local/bin/opencode is a directory on this box and precedes the real
+    binary on PATH, so spawning a bare "opencode" can raise EACCES.
+    """
+    env = os.environ.get("OPENCODE_BIN")
+    if env and os.path.isfile(env) and os.access(env, os.X_OK):
+        return env
+    found = shutil.which("opencode")
+    if found and os.path.isfile(found) and os.access(found, os.X_OK):
+        return found
+    for cand in (os.path.expanduser("~/.opencode/bin/opencode"),
+                 "/usr/local/bin/opencode", "/usr/bin/opencode"):
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return "opencode"
+
+
+OPENCODE = resolve_opencode()
 TIMEOUT = float(os.environ.get("ACP_CHECK_TIMEOUT", "30"))
 
 INIT = {
