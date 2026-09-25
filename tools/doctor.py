@@ -158,6 +158,84 @@ WS_PROVIDERS = {"exa": "EXA_API_KEY", "firecrawl": "FIRECRAWL_API_KEY",
                 "parallel": "PARALLEL_API_KEY", "tavily": "TAVILY_API_KEY"}
 
 
+def permission_effects(config, agent="ruth"):
+    """Resolve the effective permission for each action.
+
+    Rules are evaluated in order and the last match wins, so a later `deny`
+    overrides an earlier blanket `allow`. Reading only the top-level
+    "permission" map therefore reports tools as available when the agent
+    cannot actually call them.
+    """
+    rules = []
+    raw = config.get("permissions")
+    if isinstance(raw, list):
+        rules += [r for r in raw if isinstance(r, dict)]
+    top = config.get("permission")
+    if isinstance(top, dict):
+        for action, value in top.items():
+            if isinstance(value, str):
+                rules.append({"action": action, "resource": "*", "effect": value})
+            elif isinstance(value, dict):          # per-resource map
+                for res, eff in value.items():
+                    rules.append({"action": action, "resource": res,
+                                  "effect": eff})
+    agent_cfg = (config.get("agents") or {}).get(agent) or {}
+    rules += [r for r in (agent_cfg.get("permissions") or [])
+              if isinstance(r, dict)]
+
+    def resolve(action):
+        effect = None
+        for r in rules:                            # last match wins
+            act, res = r.get("action"), r.get("resource", "*")
+            if act in (action, "*") and res in ("*", action):
+                effect = r.get("effect", "allow")
+        return effect or "unset"
+
+    out = {a: resolve(a) for a in
+           ("read", "edit", "write", "bash", "glob", "grep", "websearch",
+            "webfetch", "question", "skill", "subagent", "execute",
+            "external_directory")}
+    # Per-resource entries (e.g. external_directory denying ~/.github_token)
+    # are real protections but are not the action-level effect. Report them so
+    # a secret-file deny is never invisible just because the action is allowed.
+    restricted = []
+    for r in rules:
+        res = str(r.get("resource", "*"))
+        if res not in ("*",) and r.get("effect") in ("deny", "ask"):
+            restricted.append(f"{r.get('action')}:{res}={r['effect']}")
+    out["_restricted"] = sorted(set(restricted))
+    return out
+
+
+def tool_surface(config, env=None):
+    """What the agent can actually call, as opposed to what is declared.
+
+    A permission of "allow" does not mean a tool works: the built-in
+    websearch tool is permitted here but fails on every call without a
+    provider credential. Report the two facts separately so a broken tool is
+    never advertised as healthy.
+    """
+    eff = permission_effects(config)
+    ws = websearch_status(config, os.environ if env is None else env)
+    ws_mcp = mcp_entry(config, "websearch")
+    return {
+        "tools_read": eff["read"],
+        "tools_edit": eff["edit"],
+        "tools_bash": eff["bash"],
+        "tools_webfetch": eff["webfetch"],
+        "tools_question": eff["question"],
+        "tools_subagent": eff["subagent"],
+        "tools_execute": eff["execute"],
+        "tools_external_dir": eff["external_directory"],
+        "tools_builtin_websearch": eff["websearch"],
+        "tools_builtin_websearch_works": ws["websearch_builtin_ready"],
+        "tools_websearch_mcp": bool(ws_mcp.get("command")),
+        "tools_skills_configured": len(config.get("skills") or []),
+        "tools_restricted": eff["_restricted"] or "none",
+        "tools_mcp_servers": sorted(config.get("mcp") or {}),
+    }
+
+
 def websearch_status(config, env):
     """Describe websearch readiness without performing a search.
 
@@ -232,6 +310,7 @@ _ws_status["websearch_ready"] = bool(
         and _ws_mcp.get("enabled", True) is not False
         and _ws_mcp.get("disabled", False) is not True))
 results.update(_ws_status)
+results.update(tool_surface(cfg))
 # 3a-2. ACP: opencode is the Agent Client Protocol server (`opencode acp`).
 # Health = a real `initialize` handshake over stdio returns a result.
 results["acp_ready"] = False
@@ -467,6 +546,11 @@ survives context resets and is consulted at the start of every session.
 - GitHub MCP: {results["mcp_initialize"]} tools ({results["mcp_tools"]})
 - Websearch: ready={results["websearch_ready"]} (builtin={results["websearch_builtin_ready"]} provider={results["websearch_provider"]} key={results["websearch_key"]}, mcp={results["websearch_mcp_registered"]})
 - ACP: {results["acp_ready"]} (protocol {results["acp_protocol"]})
+- Tools: read={results["tools_read"]} edit={results["tools_edit"]} bash={results["tools_bash"]} execute={results["tools_execute"]}
+- Tool websearch (builtin): permitted={results["tools_builtin_websearch"]} works={results["tools_builtin_websearch_works"]} | mcp={results["tools_websearch_mcp"]}
+- Tool question: {results["tools_question"]} | subagent: {results["tools_subagent"]} | external_dir: {results["tools_external_dir"]}
+- MCP servers: {', '.join(results["tools_mcp_servers"])}
+- Skill sources: {results["tools_skills_configured"]}
 - Permission allow: {results["permission_allow"]}
 - MCP configured: {results["mcp_configured"]}
 - Mojibake remaining: {results["mojibake_remaining"]}
