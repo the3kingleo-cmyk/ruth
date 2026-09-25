@@ -13,14 +13,30 @@ import numpy as np
 from . import __version__, paths
 
 
-def _mind(args):
+def _mind(args, read_only: bool = False):
+    """Open her mind for a command.
+
+    Writing commands take exclusive ownership first. If `ruth app` is awake
+    it already owns her, and loading a second full copy here would overwrite
+    everything the app has learned the moment this process saved. So a writer
+    is refused instead, with the name of the owner.
+
+    Read-only commands (status, introspect, check) pass read_only=True and
+    are happy to look at whatever is on disk.
+    """
     from .config import BrainConfig
     from .engine import Brain
     from .evolve import config_from_active
     from .mind import Mind
+    from .owner import owner as _own
     home = args.home or paths.home()
     state = os.path.join(home, "brain.npz")
     cfg = config_from_active() if os.path.exists(os.path.join(home, "config.json")) else BrainConfig()
+    if not read_only:
+        # hold the lock for the life of this command
+        lock = _own(home, label=f"ruth {getattr(args, 'cmd', '?')}")
+        lock.__enter__()
+        args._lock = lock
     return Mind(Brain.load_or_create(state, cfg), home=home)
 
 
@@ -81,7 +97,7 @@ def cmd_say(args):
 
 
 def cmd_think(args):
-    m = _mind(args)
+    m = _mind(args, read_only=True)
     from .senses import byte_code
     for c in args.prompt.encode("utf-8"):
         m.brain.step({"text": byte_code(c)}, 1.0, learn=False)
@@ -100,11 +116,11 @@ def cmd_sleep(args):
 
 def cmd_dreams(args):
     from . import dream
-    _out(dream.journal(_mind(args), args.last))
+    _out(dream.journal(_mind(args, read_only=True), args.last))
 
 
 def cmd_check(args):
-    m = _mind(args)
+    m = _mind(args, read_only=True)
     found = {}
     for p in args.files:
         with open(p, "rb") as f:
@@ -117,7 +133,7 @@ def cmd_check(args):
 
 
 def cmd_status(args):
-    m = _mind(args)
+    m = _mind(args, read_only=True)
     b = m.brain
     params = sum(a.size for k, a in b.arrays().items()
                  if not k.startswith(("replay.", "mem.", "rls.p")))
@@ -164,7 +180,7 @@ def cmd_bench(args):
 # ---------------------------------------------------------------- senses
 def cmd_hear(args):
     from .senses import Cochlea, read_wav
-    m = _mind(args)
+    m = _mind(args, read_only=True)
     data, sr = read_wav(args.wav)
     ear = Cochlea(sr, m.brain.cfg.senses["ears"])
     s = []
@@ -177,7 +193,7 @@ def cmd_hear(args):
 
 def cmd_see(args):
     from .senses import EventRetina
-    m = _mind(args)
+    m = _mind(args, read_only=True)
     frames = np.load(args.frames, allow_pickle=False)
     eye = EventRetina(grid=int(round((m.brain.cfg.senses["eyes"] // 2) ** 0.5)))
     n = 0
@@ -192,7 +208,7 @@ def cmd_see(args):
 
 def cmd_voice(args):
     from .senses import Voice, byte_code, write_wav
-    m = _mind(args)
+    m = _mind(args, read_only=True)
     voice = Voice()
     curves = []
     for b in args.text.encode("utf-8"):
@@ -204,7 +220,7 @@ def cmd_voice(args):
 
 # ---------------------------------------------------------------- self
 def cmd_introspect(args):
-    _out(_mind(args).brain.graph())
+    _out(_mind(args, read_only=True).brain.graph())
 
 
 def cmd_patch(args):
@@ -314,7 +330,22 @@ def main(argv=None):
         p.error("evolve patch needs a patch file")
     if args.home:
         os.environ["RUTH_HOME"] = args.home
-    args.fn(args)
+    from .owner import MindBusy
+    lock = None
+    try:
+        args.fn(args)
+    except MindBusy as exc:
+        # A clean refusal, not a traceback: the situation is normal (the app is
+        # awake) and the owner is named so the way out is obvious.
+        sys.stderr.write(f"ruth: {exc}\n")
+        raise SystemExit(2)
+    finally:
+        lock = getattr(args, "_lock", None)
+        if lock is not None:
+            try:
+                lock.__exit__(None, None, None)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

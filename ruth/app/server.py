@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 from .. import __version__, dream, paths
+from ..owner import MindBusy, owner
 from ..config import BrainConfig
 from ..engine import Brain
 from ..mind import Mind
@@ -121,25 +122,51 @@ class Life:
         if self.ear is None or self.ear.sr != rate:
             self.ear = Cochlea(rate, self.mind.brain.cfg.senses["ears"])
         samples = np.asarray(body.get("samples", []), dtype=float)[: rate * 2]
+        if samples.size == 0:
+            return {"moments": 0, "error": "no samples"}
         n = 0
         for feat, dt in self.ear.process(samples):
             self.mind.brain.step({"ears": feat}, dt / 0.01)
             self.note()
             n += 1
-        return {"moments": n}
+        # A buffer shorter than one cochlear hop yields nothing, which used to
+        # read as "she heard but had nothing to say". Say which it was.
+        return {"moments": n, "samples": int(samples.size),
+                "too_short": bool(n == 0)}
+
+    def _eye(self):
+        if self.eye is None:
+            self.eye = EventRetina(
+                grid=int(round((self.mind.brain.cfg.senses["eyes"] // 2) ** 0.5)))
+        return self.eye
 
     def see(self, body):
         w, h = int(body.get("w", 0)), int(body.get("h", 0))
         px = np.asarray(body.get("pixels", []), dtype=float)
-        if w * h == 0 or px.size != w * h or w * h > 128 * 128:
-            return {"error": "expected w*h grey pixels in 0..1"}
-        if self.eye is None:
-            self.eye = EventRetina(grid=int(round((self.mind.brain.cfg.senses["eyes"] // 2) ** 0.5)))
-        ev, dt = self.eye.observe(px.reshape(h, w), float(body.get("t", time.time())))
+        if w * h == 0 or px.size != w * h or w * h > 512 * 512:
+            return {"error": f"expected w*h grey pixels in 0..1 "
+                            f"(got {px.size} for {w}x{h})"}
+        eye = self._eye()
+        # The client captures whatever its camera gives (the app asks for
+        # 160x120 = 19200 px) while the retina is grid x grid (4x4 = 16).
+        # Reshaping to the client's w/h and handing that to the retina has
+        # never worked: it raised a broadcast error on every single frame, so
+        # her eyes were dead in the interface. Her retina decides its own
+        # input size; downsample to it instead of trusting the client.
+        frame = px.reshape(h, w)
+        g = eye.grid
+        if (h, w) != (g, g):
+            rows = np.linspace(0, h, g + 1).astype(int)
+            cols = np.linspace(0, w, g + 1).astype(int)
+            frame = np.array([[frame[rows[i]:max(rows[i + 1], rows[i] + 1),
+                                      cols[j]:max(cols[j + 1], cols[j] + 1)].mean()
+                               for j in range(g)] for i in range(g)])
+        ev, dt = eye.observe(frame, float(body.get("t", time.time())))
         if dt > 0:
             self.mind.brain.step({"eyes": ev}, dt / 0.01)
             self.note()
-        return {"events": int(round(ev.sum() * 100))}
+        return {"events": int(round(ev.sum() * 100)), "grid": g,
+                "resized_from": [int(w), int(h)] if (w, h) != (g, g) else None}
 
     def voice(self, body):
         text = str(body.get("text", ""))[:400].encode("utf-8")
@@ -231,6 +258,30 @@ def make_handler(life: Life):
 
 def serve(host: str = "127.0.0.1", port: int = 7438, open_browser: bool = True,
           home: str | None = None) -> None:
+    """Take exclusive ownership of her mind, then run her.
+
+    The app is her long-lived owner. Without this, `ruth app` and `ruth teach`
+    each loaded a full independent copy of brain.npz and whichever exited
+    last destroyed the other. Measured here: the app held 7,262 moments in
+    memory while the CLI had already written a 689-moment copy over the same
+    file, ready to be clobbered in turn.
+    """
+    try:
+        lock = owner(home or paths.home(), label="ruth app")
+        lock.__enter__()
+    except MindBusy as exc:
+        raise SystemExit(f"another Ruth is already awake -- {exc}")
+    try:
+        _awake(host, port, open_browser, home)
+    finally:
+        try:
+            lock.__exit__(None, None, None)
+        except Exception:
+            pass
+
+
+def _awake(host: str = "127.0.0.1", port: int = 7438, open_browser: bool = True,
+           home: str | None = None) -> None:
     life = Life(home)
     threading.Thread(target=life.background, daemon=True).start()
     httpd = ThreadingHTTPServer((host, port), make_handler(life))

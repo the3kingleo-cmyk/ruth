@@ -154,6 +154,19 @@ class TestAgainstTheRealMind(unittest.TestCase):
         self.bin = os.environ.get("RUTH_BIN", os.path.expanduser("~/.local/bin/ruth"))
         if not os.path.exists(self.bin):
             self.skipTest("ruth is not installed on this box")
+        # Her own mind, not the live one. These tests used to teach the mind
+        # the box is actually running, which is both rude and now refused:
+        # `ruth app` holds exclusive ownership, and a writer that cannot get
+        # the lock is stopped rather than allowed to clobber it.
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._env = mock.patch.dict(os.environ, {"RUTH_HOME": self._tmp.name})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+        patch = mock.patch.object(mm, "RUTH_HOME", self._tmp.name)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def test_status_reports_a_lived_mind(self):
         s = mm.mind_status()

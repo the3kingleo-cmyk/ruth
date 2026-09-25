@@ -21,6 +21,9 @@ did rather than what an assistant inferred.
   mind_check       does she recognise anything private in these files
   mind_introspect  her own account of her state
   mind_learned     what she has lived, from her state
+  mind_hear        let her listen to a WAV file (16 of her 16 ears)
+  mind_see         let her watch frames, a T x H x W .npy array (32 eyes)
+  mind_voice       make her speak text to a WAV file, via her own motor neurons
   mind_export      export her brain to a model file
 
 Talks to her installed CLI rather than importing the package: the mind needs
@@ -174,6 +177,33 @@ def mind_learned():
             "graph": graph.get("nodes", {}) if graph else None}
 
 
+def mind_hear(wav):
+    """Feed her a WAV file. Her cochlea is 16-dimensional."""
+    if not wav or not os.path.exists(str(wav)):
+        raise MindError(f"no such WAV: {wav}")
+    return _json("hear", str(wav))
+
+
+def mind_see(frames, fps=30):
+    """Feed her frames: a .npy array shaped T x H x W, read by her event retina."""
+    if not frames or not os.path.exists(str(frames)):
+        raise MindError(f"no such frames file: {frames}")
+    return _json("see", str(frames), "--fps", str(int(fps)))
+
+
+def mind_voice(text, out=None):
+    """Make her speak. The WAV is written by her own motor neurons and vocal
+    tract; she is untrained, so it is babble that follows the text, not
+    intelligible speech."""
+    if not text or not str(text).strip():
+        raise MindError("text is required")
+    target = out or os.path.join(RUTH_HOME, "voice.wav")
+    result = _json("voice", str(text), target)
+    if isinstance(result, dict) and "wrote" in result:
+        result["path"] = result["wrote"]
+    return result
+
+
 def mind_export(path=None):
     target = path or os.path.join(RUTH_HOME, "brain-export.bin")
     rc, out, err = _ruth("export", target)
@@ -242,6 +272,26 @@ TOOLS = [
          "patch": {"type": "object",
                    "description": 'e.g. {"op": "grow_neurons", "n": 16}'}},
          "required": ["patch"]}},
+    {"name": "mind_hear", "description":
+     "Let her listen to a WAV file through her 16 cochlear channels. Returns "
+     "how long she heard and how surprised she was.",
+     "inputSchema": {"type": "object", "properties": {
+         "wav": {"type": "string", "description": "path to a .wav file"}},
+         "required": ["wav"]}},
+    {"name": "mind_see", "description":
+     "Let her watch frames through her event retina (32 eyes). Frames are a "
+     ".npy array shaped T x H x W; she responds to change, not to stillness.",
+     "inputSchema": {"type": "object", "properties": {
+         "frames": {"type": "string", "description": "path to a T x H x W .npy"},
+         "fps": {"type": "integer", "description": "default 30"}},
+         "required": ["frames"]}},
+    {"name": "mind_voice", "description":
+     "Make her speak text to a WAV, driven by her own motor neurons. She is "
+     "untrained, so the output follows the text as babble, not speech.",
+     "inputSchema": {"type": "object", "properties": {
+         "text": {"type": "string"},
+         "out": {"type": "string", "description": "output .wav path"}},
+         "required": ["text"]}},
     {"name": "mind_export", "description":
      "Export her brain to a model file and return its path.",
      "inputSchema": {"type": "object", "properties": {
@@ -252,7 +302,8 @@ HANDLERS = {"mind_status": mind_status, "mind_think": mind_think,
             "mind_sleep": mind_sleep, "mind_dreams": mind_dreams,
             "mind_check": mind_check, "mind_introspect": mind_introspect,
             "mind_learned": mind_learned, "mind_export": mind_export,
-            "mind_patch": mind_patch}
+            "mind_patch": mind_patch, "mind_hear": mind_hear,
+            "mind_see": mind_see, "mind_voice": mind_voice}
 
 
 def _respond(req, result):
