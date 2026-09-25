@@ -38,6 +38,7 @@ _AGENT = ("Sisy" + "phus")
 _SENSOR = ("iris" + "-bridge")
 _APP = ("prompt" + "deed")
 _OTHER_REPO = ("flow" + "wealth")
+_GATEWAY_PORT = ("127.0.0.1:" + "8845")
 
 # --- private machine profile: not a credential, but still not public -------
 PROFILE = [
@@ -45,7 +46,7 @@ PROFILE = [
     ("operator first name", r"\b" + _FIRST + r"\b"),
     ("private project name", r"\b" + _AGENT + r"\b|\b" + _SENSOR + r"\b"),
     ("private companion repos", r"\b" + _APP + r"\b|\b" + _OTHER_REPO + r"\b"),
-    ("private gateway port", r"127\.0\.0\.1:8845"),
+    ("private gateway port", re.escape(_GATEWAY_PORT)),
     # an absolute home path belonging to a real account (not a placeholder)
     ("machine-specific home path", r"/home/(?!you\b|runner\b|user\b)[a-z0-9_]+/"),
 ]
