@@ -21,8 +21,22 @@ MODEL_DIR="${RUTH_MODEL_DIR:-$HOME/.local/share/models}"
 PORT="${GEMMA_PORT:-8077}"
 # -t 4 uses every vCPU; context is capped so the KV cache cannot push a
 # 6.4 GB box into swap.
-CTX="${GEMMA_CTX:-4096}"
+# opencode's own agent prompt (system + tool schemas) is ~8,100 tokens, so a
+# 4k context cannot serve as an agent at all. 12k fits in this box's memory
+# with ~1.5 GB to spare.
+CTX="${GEMMA_CTX:-12288}"
 THREADS="${GEMMA_THREADS:-4}"
+# One slot. With 4 slots opencode's parallel requests all fight for the same
+# 4 vCPU and each one crawls at ~0.9 tok/s; serialised, a single request runs
+# at ~11.9 tok/s. Measured on this box.
+PARALLEL="${GEMMA_PARALLEL:-1}"
+# Gemma 3's own template refuses a `system` role -- it raises "Conversation
+# roles must alternate user/assistant/..." -- and opencode always sends one,
+# so every request 400s. This template folds the system message into the
+# first user turn and keeps Gemma's turn markers.
+TEMPLATE="${GEMMA_CHAT_TEMPLATE:-$HOME/.local/share/models/chatml-system.jinja}"
+TEMPLATE_ARG=""
+[ -f "$TEMPLATE" ] && TEMPLATE_ARG="--chat-template $TEMPLATE"
 # Measured on this box (4 vCPU i3-10110U, no GPU, 6.4 GB):
 #   gemma-3-1b-it Q4 (0.81 GB)  -> 50 tokens in 2.6 s   usable
 #   gemma-3-4b-it Q4 (2.49 GB)  -> 0.09-0.59 tok/s, a 60-token answer
@@ -46,8 +60,9 @@ case "$cmd" in
   serve)
     m=$(pick_model)
     [ -n "$m" ] || { echo "no Gemma downloaded. Run: gemma fetch" >&2; exit 1; }
+    # shellcheck disable=SC2086
     exec llama-server -m "$m" --host 127.0.0.1 --port "$PORT" \
-      -c "$CTX" -t "$THREADS" --no-webui "$@"
+      -c "$CTX" -t "$THREADS" -np "$PARALLEL" --no-webui $TEMPLATE_ARG "$@"
     ;;
   fetch)
     # 1B is the default because it is the one measured to answer here;

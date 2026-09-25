@@ -48,8 +48,14 @@ class TestGemmaLauncher(unittest.TestCase):
                          "context must be bounded on a 6.4 GB box")
         m = re.search(r'GEMMA_CTX:-(\d+)', self.text)
         self.assertIsNotNone(m)
-        self.assertLessEqual(int(m.group(1)), 8192,
-                             "context beyond 8k will not fit here")
+        ctx = int(m.group(1))
+        # opencode's own agent prompt measured 8,105 tokens, so a smaller
+        # window cannot serve as an agent at all...
+        self.assertGreaterEqual(ctx, 8192,
+                                "opencode's agent prompt alone is ~8,105 tokens")
+        # ...and a much larger KV cache will not fit in 6.4 GB alongside the
+        # opencode stack.
+        self.assertLessEqual(ctx, 16384, "KV cache must not exhaust 6.4 GB")
 
     def test_serves_openai_compatible_http(self):
         """opencode and most harnesses speak OpenAI-shaped HTTP; that is how
@@ -137,3 +143,57 @@ class TestTheMeasuredChoice(unittest.TestCase):
         # a future change to the default should have to confront the measurement
         self.assertIn("2.6 s", self.text)
         self.assertIn("0.09", self.text)
+
+
+class TestTheConnection(unittest.TestCase):
+    """A downloaded model that nothing can reach is a brain in a box.
+
+    This is the third time in this project something got installed and
+    reported done while being unreachable: Ruth's mind (installed, never
+    connected to the agent), the MCP servers, and then Gemma itself -- which
+    served perfectly on 127.0.0.1:8077 while `opencode models` showed zero of
+    it and the config had no `provider` key at all.
+
+    So the provider registration is pinned. If someone removes it, the model
+    goes back to being decorative.
+    """
+
+    def setUp(self):
+        cfg_path = pathlib.Path(os.path.expanduser(
+            "~/.config/opencode/opencode.json"))
+        if not cfg_path.exists():
+            self.skipTest("no opencode config on this box")
+        self.cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    def test_a_local_provider_is_registered(self):
+        self.assertIn("provider", self.cfg,
+                      "the local model is unreachable without a provider entry")
+        self.assertIn("local", self.cfg["provider"])
+
+    def test_the_provider_points_at_the_running_endpoint(self):
+        opts = self.cfg["provider"]["local"].get("options", {})
+        self.assertIn("127.0.0.1:8077", opts.get("baseURL", ""),
+                      "baseURL must be where llama-server actually listens")
+        self.assertTrue(opts.get("baseURL", "").endswith("/v1"),
+                        "the OpenAI-compatible baseURL ends in /v1")
+
+    def test_the_models_are_advertised_with_tool_calling(self):
+        models = self.cfg["provider"]["local"].get("models", {})
+        self.assertIn("gemma-3-1b", models)
+        self.assertTrue(models["gemma-3-1b"].get("tool_call"),
+                        "an agent model that cannot call tools is a chat toy")
+
+    def test_context_is_large_enough_for_an_agent_prompt(self):
+        """opencode's own prompt (system + tool schemas) measured 8,105
+        tokens. A smaller context cannot serve as an agent at all."""
+        limit = self.cfg["provider"]["local"]["models"]["gemma-3-1b"]["limit"]
+        self.assertGreaterEqual(limit["context"], 8192,
+                                "opencode's agent prompt alone is ~8,105 tokens")
+
+    def test_registering_the_provider_did_not_break_anything(self):
+        for section in ("mcp", "agents", "permission"):
+            self.assertIn(section, self.cfg,
+                          f"adding a provider must not drop {section}")
+        for server in ("github", "lsp", "websearch", "acp", "mind"):
+            self.assertIn(server, self.cfg["mcp"],
+                          f"mcp.{server} was lost while adding the provider")
