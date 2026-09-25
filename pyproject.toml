@@ -20,6 +20,12 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+[project.optional-dependencies]
+# The launcher (`ruth-launch test`, `ruth-launch doctor`) runs pytest, so the
+# dev extra has to exist for a fresh install to be verifiable. Without it a
+# clean machine reports "No module named pytest" and the suite never runs.
+dev = ["pytest>=7.0"]
+
 [project.scripts]
 ruth = "ruth.cli:main"
 
