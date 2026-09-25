@@ -108,6 +108,7 @@ set -- \
   "lsp_bridge_mcp.py:lsp_bridge_mcp.py" \
   "websearch_mcp.py:websearch_mcp.py" \
   "acp_mcp.py:acp_mcp.py" \
+  "mind_mcp.py:mind_mcp.py" \
   "acp-check:acp-check" \
   "bridge_mcp.py:bridge_mcp.py" \
   "doctor.py:opencode-doctor.py" \
@@ -191,6 +192,14 @@ mcp["acp"] = {"type": "local",
               "environment": {"PATH": "%s:%s:/usr/local/bin:/usr/bin:/bin"
                               % (os.path.expanduser("~/.opencode/bin"), bin_dir)},
               "enabled": True}
+# the mind itself, so the agent can reach her actual state rather than only
+# the persona. Two different things are called ruth: this connects them.
+mcp["mind"] = {"type": "local",
+               "command": [sys.executable, os.path.join(bin_dir, "mind_mcp.py")],
+               "environment": {"RUTH_BIN": os.path.join(bin_dir, "ruth"),
+                               "RUTH_HOME": os.path.expanduser("~/.local/share/ruth"),
+                               "PATH": f"{bin_dir}:/usr/local/bin:/usr/bin:/bin"},
+               "enabled": True}
 cfg.setdefault("skills", []).append("./ruth/.opencode/skills")
 cfg["skills"] = sorted(set(cfg["skills"]))
 # atomic: opencode watches this file, and a truncating write can be read
@@ -200,7 +209,7 @@ with open(tmp, "w") as fh:
     json.dump(cfg, fh, indent=2); fh.write("\n"); fh.flush(); os.fsync(fh.fileno())
 os.replace(tmp, cfg_path)
 back = json.load(open(cfg_path))
-for n in ("lsp", "websearch", "acp"):
+for n in ("lsp", "websearch", "acp", "mind"):
     assert n in back["mcp"], n
 print("mcp servers:", ", ".join(sorted(back["mcp"])))
 PYEOF
