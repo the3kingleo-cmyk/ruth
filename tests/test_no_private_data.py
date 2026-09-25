@@ -68,7 +68,12 @@ def scan_files():
         rel = path.relative_to(ROOT).as_posix()
         if rel.startswith(".git/") or rel == SELF or "__pycache__" in rel:
             continue
-        if path.suffix in {".png", ".svg", ".jpg", ".jpeg", ".ico", ".zip"}:
+        # skip binaries and generated tool artifacts: reading them as text
+        # produces nonsense matches that are not leaks
+        if path.suffix in {".png", ".jpg", ".jpeg", ".ico", ".zip", ".gz",
+                           ".npz", ".bin", ".pyc", ".sqlite", ".db"}:
+            continue
+        if path.name in {".coverage", "coverage.xml"} or path.name.startswith(".coverage."):
             continue
         yield rel, path
 

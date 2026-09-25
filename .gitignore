@@ -7,3 +7,10 @@ __pycache__/
 /dist/
 *.egg-info/
 .env*
+# local tool state and build artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.opencode-run/
+*.log

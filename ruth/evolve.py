@@ -88,8 +88,8 @@ def corpus(home: str | None = None) -> bytes:
 
 
 def evaluate(overrides: dict, text: bytes, train: int, test: int) -> float:
-    from ..config import BrainConfig
-    from ..engine import Brain
+    from .config import BrainConfig
+    from .engine import Brain
     cfg = BrainConfig(senses={"text": 9}, **overrides)
     brain = Brain(cfg)
     brain.learn_bytes(text[:train])
@@ -228,6 +228,6 @@ def evolve_patch(root: str, patch_file: str, message: str | None = None,
 
 def config_from_active():
     """BrainConfig carrying the live evolved overrides."""
-    from ..config import BrainConfig
+    from .config import BrainConfig
     fields = {f.name for f in dataclasses.fields(BrainConfig)}
     return BrainConfig(**{k: v for k, v in active_overrides().items() if k in fields})
