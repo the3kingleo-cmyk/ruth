@@ -39,6 +39,10 @@ except ImportError:          # Windows: importing fcntl here used to stop her
     import msvcrt
 
 LOCK_NAME = ".ruth-owner.lock"
+# Windows byte locks are mandatory: a locked byte cannot even be read. The
+# lock therefore sits far past the recorded owner line, so who_owns can still
+# read who holds her.
+WIN_LOCK_OFFSET = 1 << 30
 
 
 class MindBusy(Exception):
@@ -66,8 +70,18 @@ def who_owns(home: str) -> str | None:
         return None
     pid = recorded.split()[0]
     if fcntl is None:
-        # On Windows os.kill(pid, 0) is not a probe: signal 0 is CTRL_C_EVENT.
-        return recorded
+        # On Windows os.kill(pid, 0) is not a probe (signal 0 is CTRL_C_EVENT),
+        # so ask the lock itself: if it can be taken, nobody holds her.
+        fd = os.open(path, os.O_RDWR | getattr(os, "O_BINARY", 0))
+        try:
+            try:
+                _lock(fd)
+            except OSError:
+                return recorded
+            _unlock(fd)
+            return None
+        finally:
+            os.close(fd)
     try:
         os.kill(int(pid), 0)
     except (ValueError, ProcessLookupError):
@@ -81,7 +95,7 @@ def _lock(fd: int) -> None:
     if fcntl is not None:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     else:
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, WIN_LOCK_OFFSET, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
 
 
@@ -89,7 +103,7 @@ def _unlock(fd: int) -> None:
     if fcntl is not None:
         fcntl.flock(fd, fcntl.LOCK_UN)
     else:
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, WIN_LOCK_OFFSET, os.SEEK_SET)
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 

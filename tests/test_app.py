@@ -102,7 +102,11 @@ class TestApp(unittest.TestCase):
                                   kwargs={"idle_replay": 1.0, "idle_sleep": 2.0}, daemon=True)
         try:
             worker.start()
-            life.touched = time.time()   # someone was here; then a long quiet
+            # someone was here after the loop started; then a long quiet. (The
+            # pause matters on Windows, where time.time() ticks every ~15 ms and
+            # "after" could otherwise read as the same instant.)
+            time.sleep(0.2)
+            life.touched = time.time()
             self.assertTrue(entered.wait(30), "she never fell asleep")
             t0 = time.time()
             c = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=30)
