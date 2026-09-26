@@ -8,10 +8,18 @@ async function api(path, body) {
   const opt = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   };
-  const r = await fetch(path, opt);
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.error || r.statusText);
-  return data;
+  // While she is in the middle of a dream step the app answers 503 "she is
+  // dreaming". That is a pause, not a failure: wait and ask again.
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(path, opt);
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 503 && attempt < 5) {
+      await new Promise((ok) => setTimeout(ok, 1000 * (data.retry_in || 3)));
+      continue;
+    }
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    return data;
+  }
 }
 
 // ---------------------------------------------------------------- conversation
@@ -86,9 +94,9 @@ $("sleepBtn").onclick = async () => {
   b.disabled = true; b.textContent = "Sleeping…";
   try {
     const r = await api("/api/sleep", {});
-    const n = r.nightmares, p = r.policy;
-    bubble("system", `She slept: ${r.consolidation.longterm} memory basins, rehearsed ${n.rehearsed} confidences ` +
-      `(${n.strengthened} strengthened), caution now ${p.adopted_caution ?? r.temperament.caution}.`);
+    const c = r.consolidation || {}, n = r.nightmares || {}, p = r.policy || {};
+    bubble("system", `She slept: ${c.longterm ?? "?"} memory basins, rehearsed ${n.rehearsed ?? 0} confidences ` +
+      `(${n.strengthened ?? 0} strengthened), caution now ${(p.adopted_caution ?? r.temperament.caution).toFixed(2)}.`);
     loadDreams();
   } catch (err) { bubble("system", "She couldn't sleep: " + err.message); }
   b.disabled = false; b.textContent = "Sleep";
@@ -177,7 +185,7 @@ async function poll() {
     const s = await api("/api/state");
     const born = s.identity && s.identity.born ? new Date(s.identity.born.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")) : null;
     $("vitals").textContent = `v${s.version}` + (born && !isNaN(born) ? ` · born ${born.toLocaleDateString()}` : "") +
-      ` · ${s.moments.toLocaleString()} moments lived`;
+      ` · ${s.moments.toLocaleString()} moments lived` + (s.dreaming ? " · dreaming" : "");
     drawNeurons(s.activity);
     $("coreLabel").textContent = `cortex · ${s.neurons} ${s.cell} neurons`;
     drawSurprise(s.surprise);
@@ -186,7 +194,9 @@ async function poll() {
     renderTraits(s.temperament);
     renderMemory(s);
   } catch (e) {
-    $("vitals").textContent = "resting (the app server is not running)";
+    $("vitals").textContent = e instanceof TypeError
+      ? "resting (the app server is not running)"
+      : "she is dreaming; she'll be back in a moment";
   }
 }
 
