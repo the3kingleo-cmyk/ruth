@@ -10,6 +10,7 @@ import json
 import os
 import threading
 import time
+import traceback
 import webbrowser
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,11 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
          ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
+# How long a request waits for her to finish dreaming before it is told
+# so. Long enough for a normal turn, short enough that the browser has
+# not already given up and closed the socket.
+LOCK_WAIT = float(os.environ.get("RUTH_LOCK_WAIT", "8"))
+
 
 class Life:
     """One mind plus the live sensory organs attached to it."""
@@ -43,23 +49,49 @@ class Life:
         self.saved = time.time()
         self.touched = time.time()
         self.replayed = 0
+        # A background dream holds the lock for minutes; requests use this to
+        # say "she is dreaming" instead of hanging until the client gives up.
+        self.busy_until = 0.0
         self.stop = threading.Event()
 
     def background(self, idle_replay: float = 20.0, idle_sleep: float = 900.0) -> None:
         """Hippocampus -> neocortex while nobody is talking: short replays after
-        a quiet moment, a full night's sleep after a long quiet."""
+        a quiet moment, a full night's sleep after a long quiet.
+
+        Nothing in here may raise. An exception used to escape the while loop
+        and kill the thread, after which she never replayed or slept again and
+        nothing said so -- `background_replays` simply froze.
+
+        A pass also holds self.lock for as long as it runs, and with tens of
+        thousands of lived moments a single dream takes minutes. So the loop
+        records when it is busy and the request path can say "she is dreaming"
+        instead of hanging until the browser gives up.
+        """
         slept_at = time.time()
         while not self.stop.wait(5.0):
             idle = time.time() - self.touched
-            if idle < idle_replay:
+            if idle < idle_replay or time.time() < self.busy_until:
                 continue
-            with self.lock:
-                if idle > idle_sleep and self.touched > slept_at:
-                    dream.sleep(self.mind)
-                    slept_at = time.time()
-                    self.autosave(force=True)
-                else:
-                    self.replayed += self.mind.brain.replay(32)
+            try:
+                with self.lock:
+                    # Re-check under the lock: someone may have arrived while
+                    # this iteration was waiting for it.
+                    idle = time.time() - self.touched
+                    if idle < idle_replay:
+                        continue
+                    started = time.time()
+                    if idle > idle_sleep and self.touched > slept_at:
+                        dream.sleep(self.mind)
+                        slept_at = time.time()
+                        self.autosave(force=True)
+                    else:
+                        self.replayed += self.mind.brain.replay(32)
+                    # Do not start another pass immediately after a long one.
+                    self.busy_until = time.time() + 5.0
+            except Exception:
+                # Never let a failed dream end her background life.
+                self.busy_until = time.time() + 30.0
+                traceback.print_exc()
 
     def note(self) -> None:
         s = self.mind.brain.last.get("surprise")
@@ -275,12 +307,32 @@ def make_handler(life: Life):
                     body = json.loads(self.rfile.read(n) or b"{}")
                 except ValueError:
                     return self._send(400, {"error": "bad json"})
-            with life.lock:
-                life.touched = time.time()
+            # Record that someone is here BEFORE taking the lock. This used to
+            # be set inside `with life.lock`, which meant a request arriving
+            # while a long dream held the lock could not mark the app as busy,
+            # so the background loop kept dreaming and every further request
+            # queued behind it. The page showed "Failed to fetch" because of
+            # this ordering, not because of the network.
+            life.touched = time.time()
+            # A dream holds the lock for minutes. Waiting on it indefinitely is
+            # what made the page say "Failed to fetch": the browser gave up,
+            # the socket closed, and the server then logged a BrokenPipeError
+            # for a request that was never going to be answered in time. Say so
+            # plainly instead, and let the page try again.
+            if not life.lock.acquire(timeout=LOCK_WAIT):
+                return self._send(503, {"error": "she is dreaming",
+                                        "retry_in": 5}, "application/json")
+            try:
                 try:
                     return self._send(200, getattr(life, name)(body))
+                except (BrokenPipeError, ConnectionResetError):
+                    # The browser gave up and closed the socket. There is nobody
+                    # left to answer, and a 500 would be a lie. Stay quiet.
+                    return
                 except Exception as e:  # keep her alive whatever a request does
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            finally:
+                life.lock.release()
 
         def _static(self, path):
             rel = "index.html" if path in ("/", "") else path.lstrip("/")
