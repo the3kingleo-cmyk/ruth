@@ -109,6 +109,48 @@ class Life:
     def feedback(self, body):
         return self.mind.feedback(bool(body.get("good")))
 
+    def soul(self, body):
+        """Let an external canonical source (the private memory repository)
+        set who she is and what she knows.
+
+        Her identity and her taught experience both live in files that other
+        programs also write, so they arrive through this endpoint rather than
+        by opening her home directly: the app holds the exclusive owner lock,
+        and a second writer would clobber whatever is in memory.
+
+        GET  reports what she currently carries.
+        POST {"identity": {...}}  merges keys into her identity.
+        POST {"teach": "..."}     teaches text privately (lived, not public).
+        """
+        if not body:
+            m = self.mind
+            return {"identity": m.identity,
+                    "temperament": m.temperament.snapshot(),
+                    "history_bytes": len(m.lived_history()),
+                    "journal": str(m.journal_path())}
+
+        out = {}
+        ident = body.get("identity")
+        if isinstance(ident, dict) and ident:
+            m = self.mind
+            # Never let a remote source rewrite her birth. She was born once.
+            born = m.identity.get("born")
+            m.identity.update({str(k): v for k, v in ident.items() if v is not None})
+            if born:
+                m.identity["born"] = born
+            out["identity"] = m.identity
+
+        teach = body.get("teach")
+        if isinstance(teach, str) and teach.strip():
+            r = self.mind.teach(teach, private=bool(body.get("private", True)))
+            out["taught"] = {k: v for k, v in r.items() if k != "private_bytes"}
+            out["private_bytes"] = r.get("private_bytes")
+
+        if out:
+            self.note()
+            self.autosave(force=True)
+        return out or {"error": "expected identity or teach"}
+
     def sleep(self, _body):
         r = dream.sleep(self.mind)
         self.autosave(force=True)
@@ -186,6 +228,7 @@ class Life:
 
 
 ROUTES = {("GET", "/api/state"): "state", ("GET", "/api/dreams"): "dreams",
+          ("GET", "/api/soul"): "soul", ("POST", "/api/soul"): "soul",
           ("POST", "/api/talk"): "talk", ("POST", "/api/teach"): "teach",
           ("POST", "/api/feedback"): "feedback", ("POST", "/api/sleep"): "sleep",
           ("POST", "/api/hear"): "hear", ("POST", "/api/see"): "see",
