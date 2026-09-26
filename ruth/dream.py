@@ -114,7 +114,8 @@ def nightmares(mind, rng) -> dict:
     return {"rehearsed": rehearsed, "caught": caught, "strengthened": strengthened}
 
 
-def extinction(mind, rng, windows: int = 24, width: int = 48, budget: int = 200) -> dict:
+def extinction(mind, rng, windows: int = 24, width: int = 48, budget: int = 200,
+               pause=None) -> dict:
     """Calm false alarms on openly-lived history, never near a confidence."""
     b = mind.brain
     history = mind.lived_history()
@@ -124,6 +125,8 @@ def extinction(mind, rng, windows: int = 24, width: int = 48, budget: int = 200)
     protected = _protected(history, mind.cues, rng)
     visited = calmed = 0
     for _ in range(windows):
+        if pause is not None and not pause():
+            break
         i = int(rng.integers(0, len(history) - width + 1))
         window = history[i:i + width]
         visited += 1
@@ -164,7 +167,7 @@ def free_dreams(mind, rng, count: int = 3, length: int = 80) -> list:
     return dreams
 
 
-def dream_policy(mind, rng, candidates: int = 7) -> dict:
+def dream_policy(mind, rng, candidates: int = 7, pause=None) -> dict:
     """Dream-RSI: evaluate alternative discretion policies in the replay
     simulator built from lived history; adopt the best."""
     t = mind.temperament
@@ -183,6 +186,8 @@ def dream_policy(mind, rng, candidates: int = 7) -> dict:
             b.restore(snap)
     protected = _protected(history, mind.cues, rng)
     for _ in range(min(24, max(len(history) // 40, 0))):
+        if pause is not None and not pause():
+            break
         i = int(rng.integers(0, len(history) - 40 + 1))
         snap = b.snapshot()
         worst = 0.0
@@ -210,20 +215,47 @@ def dream_policy(mind, rng, candidates: int = 7) -> dict:
             "leak_rate": round(leaks, 3), "needless_silence": round(mute, 3)}
 
 
-def sleep(mind, seed: int | None = None, dreams: int = 3) -> dict:
+def sleep(mind, seed: int | None = None, dreams: int = 3, pause=None) -> dict:
+    """One night: consolidate, calm false alarms, rehearse confidences, tune
+    caution, dream freely, then consider growing.
+
+    `pause`, if given, is called between steps of the night. It may let other
+    work run (the app uses it to hand the lock to a waiting request) and
+    returns False when she should wake up early; the night then ends there.
+    A long-lived mind takes minutes to sleep on a small machine, and holding
+    everything else off for all of that is what made the app look dead.
+
+    A phase that fails is recorded in the journal instead of ending the night
+    silently. Before this, one exception after consolidation meant the sleep
+    counter went up but no journal entry was ever written.
+    """
     rng = np.random.default_rng(seed)
     report = {"t": time.time()}
-    report["consolidation"] = mind.brain.sleep()
-    report["extinction"] = extinction(mind, rng)
-    report["nightmares"] = nightmares(mind, rng)
-    report["policy"] = dream_policy(mind, rng)
-    report["dreams"] = free_dreams(mind, rng, dreams)
-    mind.brain.memory.consolidate()          # what was dreamt becomes long-term
     from .morphogenesis import morphogenesis
-    report["growth"] = morphogenesis(mind)
+    phases = [
+        ("consolidation", lambda: mind.brain.sleep()),
+        ("extinction", lambda: extinction(mind, rng, pause=pause)),
+        ("nightmares", lambda: nightmares(mind, rng)),
+        ("policy", lambda: dream_policy(mind, rng, pause=pause)),
+        ("dreams", lambda: free_dreams(mind, rng, dreams)),
+        ("longterm", lambda: mind.brain.memory.consolidate()),  # dreams become long-term
+        ("growth", lambda: morphogenesis(mind)),
+    ]
+    for i, (name, run) in enumerate(phases):
+        if i and pause is not None and not pause():
+            report["woke_early"] = name
+            break
+        try:
+            report[name] = run()
+        except Exception as e:  # a bad phase must not erase the whole night
+            report[name] = {"error": f"{type(e).__name__}: {e}"}
+    report.setdefault("dreams", [])
     report["temperament"] = mind.temperament.snapshot()
-    with open(mind.journal_path(), "a", encoding="utf-8") as f:
-        f.write(json.dumps(report) + "\n")
+    try:
+        with open(mind.journal_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(report, default=str) + "\n")
+    except OSError as e:
+        report["journal_error"] = str(e)
     return report
 
 
