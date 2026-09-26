@@ -102,9 +102,11 @@ class TestTheBoundaryHolds(unittest.TestCase):
     def test_the_token_free_suite_still_passes(self):
         """The real guard, not a paraphrase of it."""
         done = subprocess.run(
-            [sys.executable, "-m", "pytest", "tests/test_token_free.py", "-q"],
+            # unittest, not pytest: CI installs only the package, and pytest
+            # being absent made this guard fail for a reason unrelated to it.
+            [sys.executable, "-m", "unittest", "tests.test_token_free"],
             cwd=str(ROOT), capture_output=True, text=True, timeout=300)
-        self.assertEqual(done.returncode, 0, done.stdout[-2000:])
+        self.assertEqual(done.returncode, 0, (done.stdout + done.stderr)[-2000:])
 
 
 if __name__ == "__main__":

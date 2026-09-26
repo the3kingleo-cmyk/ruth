@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -126,7 +127,10 @@ class TestErrorPaths(unittest.TestCase):
 
     def test_non_json_output_is_reported_not_swallowed(self):
         done = subprocess.CompletedProcess(args=[], returncode=0, stdout="not json")
-        with mock.patch.object(mm.subprocess, "run", return_value=done):
+        # the binary check runs first; point it at something that exists so
+        # the path under test is reached on any machine
+        with mock.patch.object(mm, "RUTH_BIN", sys.executable), \
+             mock.patch.object(mm.subprocess, "run", return_value=done):
             with self.assertRaises(mm.MindError) as cm:
                 mm._json("status")
         self.assertIn("did not return JSON", str(cm.exception))
@@ -134,13 +138,19 @@ class TestErrorPaths(unittest.TestCase):
     def test_failing_command_surfaces_stderr(self):
         done = subprocess.CompletedProcess(args=[], returncode=1, stdout="",
                                            stderr="boom")
-        with mock.patch.object(mm.subprocess, "run", return_value=done):
+        # the binary check runs first; point it at something that exists so
+        # the path under test is reached on any machine
+        with mock.patch.object(mm, "RUTH_BIN", sys.executable), \
+             mock.patch.object(mm.subprocess, "run", return_value=done):
             with self.assertRaises(mm.MindError) as cm:
                 mm._json("status")
         self.assertIn("boom", str(cm.exception))
 
     def test_timeout_is_reported(self):
-        with mock.patch.object(mm.subprocess, "run",
+        # the binary check runs first; point it at something that exists so
+        # the path under test is reached on any machine
+        with mock.patch.object(mm, "RUTH_BIN", sys.executable), \
+             mock.patch.object(mm.subprocess, "run",
                                side_effect=subprocess.TimeoutExpired("ruth", 1)):
             with self.assertRaises(mm.MindError) as cm:
                 mm._json("status")
