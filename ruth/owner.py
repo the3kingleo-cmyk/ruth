@@ -21,16 +21,22 @@ A mind is not a file that several programs may rewrite. One owner at a time:
         ...
 
 and a writer that cannot get the lock is refused rather than allowed to
-clobber. The lock is an advisory fcntl.flock on a file in her home, so it is
-released automatically if the owner is killed, and it works across processes
-without a daemon.
+clobber. The lock is an advisory fcntl.flock on a file in her home (a
+msvcrt byte lock on Windows, which has no fcntl), so it is released
+automatically if the owner is killed, and it works across processes without a
+daemon.
 """
 from __future__ import annotations
 
 import errno
-import fcntl
 import os
 from contextlib import contextmanager
+
+try:
+    import fcntl
+except ImportError:          # Windows: importing fcntl here used to stop her
+    fcntl = None             # from starting at all on that system
+    import msvcrt
 
 LOCK_NAME = ".ruth-owner.lock"
 
@@ -59,6 +65,9 @@ def who_owns(home: str) -> str | None:
     if not recorded:
         return None
     pid = recorded.split()[0]
+    if fcntl is None:
+        # On Windows os.kill(pid, 0) is not a probe: signal 0 is CTRL_C_EVENT.
+        return recorded
     try:
         os.kill(int(pid), 0)
     except (ValueError, ProcessLookupError):
@@ -66,6 +75,22 @@ def who_owns(home: str) -> str | None:
     except PermissionError:
         return recorded
     return recorded
+
+
+def _lock(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    else:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+
+def _unlock(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    else:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
 @contextmanager
@@ -78,12 +103,12 @@ def owner(home: str, write: bool = True, label: str = ""):
     """
     os.makedirs(home, exist_ok=True)
     path = lock_path(home)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock(fd)
         except OSError as exc:
-            if exc.errno in (errno.EACCES, errno.EAGAIN):
+            if exc.errno in (errno.EACCES, errno.EAGAIN, getattr(errno, "EDEADLOCK", -1)):
                 other = who_owns(home) or "another process"
                 what = label or "this operation"
                 raise MindBusy(
@@ -99,7 +124,7 @@ def owner(home: str, write: bool = True, label: str = ""):
         yield
     finally:
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            _unlock(fd)
         except OSError:
             pass
         os.close(fd)

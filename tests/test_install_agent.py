@@ -8,6 +8,7 @@ write that keeps a watched config from losing whole sections.
 """
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -147,7 +148,7 @@ class TestInstallIsAtomicAndLossless(unittest.TestCase):
             ins = json.loads(cfg.read_text())["instructions"]
             self.assertTrue(ins)
             for rel in ins:
-                self.assertTrue(rel.startswith("/"), f"{rel} is not absolute")
+                self.assertTrue(os.path.isabs(rel), f"{rel} is not absolute")
                 self.assertTrue(pathlib.Path(rel).exists(), f"{rel} does not exist")
 
     def test_no_absolute_path_from_another_machine_in_the_installer(self):

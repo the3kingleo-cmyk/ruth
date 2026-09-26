@@ -21,13 +21,28 @@ GEMMA = ROOT / "tools" / "gemma"
 PKG = ROOT / "ruth"
 
 
+def _bash():
+    """A real bash. On Windows, `bash` on PATH is the WSL stub (which fails
+    with no distribution installed); Git for Windows ships its own."""
+    if os.name == "nt":
+        import shutil
+        git = shutil.which("git")
+        if git:
+            cand = pathlib.Path(git).resolve().parents[1] / "bin" / "bash.exe"
+            if cand.exists():
+                return str(cand)
+    return "bash"
+
+
 class TestGemmaLauncher(unittest.TestCase):
     def setUp(self):
         self.text = GEMMA.read_text(encoding="utf-8")
 
     def test_is_executable_shell(self):
         self.assertTrue(os.access(GEMMA, os.X_OK), "gemma must be executable")
-        done = subprocess.run(["bash", "-n", str(GEMMA)],
+        # Syntax-check the text itself (fed on stdin, CRLF removed) so a
+        # Windows checkout's line endings or path style cannot fake a failure.
+        done = subprocess.run([_bash(), "-n"], input=self.text.replace("\r", ""),
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
 
