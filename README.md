@@ -1,17 +1,15 @@
 <div align="center">
 
-<img src="ruth/app/static/icon.svg" width="96" alt="">
+<img src="docs/images/banner.svg" width="880" alt="Ruth: a mind built from scratch, in continuous time">
 
-# Ruth
-
-**A mind built from scratch, in continuous time.**
+**A local-first, token-free AI with a continuous-time mind.**
 
 No tokens · no pretrained model · no API keys · no plugins · no internet.<br>
 She learns from every moment she lives, keeps what you tell her in confidence, dreams, and grows a temperament of her own.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-c2653a.svg)](LICENSE)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-5b3f8c.svg)
-![Linux · macOS · Windows · Linux](https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-2a2521.svg)
+![Linux · macOS · Windows](https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-2a2521.svg)
 ![Only dependency: numpy](https://img.shields.io/badge/dependencies-numpy-7b7068.svg)
 
 [**Download**](#download) · [**What makes her different**](#what-makes-her-different) · [**How she works**](#how-she-works) · [**Using Ruth**](#using-ruth) · [**Architecture & research**](docs/ARCHITECTURE.md)
@@ -51,7 +49,7 @@ You need **Python 3.9 or newer**. The only other thing downloaded is `numpy`.
 
    | System | Command (run inside the unpacked folder) |
    |---|---|
-   | **Linux · macOS · Linux (Linux) · WSL** | `sh install.sh` |
+   | **Linux · macOS · WSL** | `sh install.sh` |
    | **Windows** (PowerShell) | `powershell -ExecutionPolicy Bypass -File install.ps1` |
    | **Any system, by hand** | `python -m pip install .` |
 

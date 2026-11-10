@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="Ruth: a mind built from scratch, in continuous time">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1714"/>
+      <stop offset="1" stop-color="#3a2a52"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c2653a" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#e8a27c"/>
+      <stop offset="1" stop-color="#7b5fb5" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <g fill="none" stroke="url(#wave)" stroke-width="2" opacity="0.85" transform="translate(0,45)">
+    <path d="M0 230 C160 150 320 310 480 230 S800 150 960 230 S1200 290 1280 220"/>
+    <path d="M0 250 C160 170 320 330 480 250 S800 170 960 250 S1200 310 1280 240" opacity="0.5"/>
+    <path d="M0 270 C160 190 320 350 480 270 S800 190 960 270 S1200 330 1280 260" opacity="0.25"/>
+  </g>
+  <text x="80" y="140" font-family="Georgia, 'Times New Roman', serif" font-size="96" font-weight="700" fill="#f4ece4">Ruth</text>
+  <text x="84" y="190" font-family="Helvetica, Arial, sans-serif" font-size="30" fill="#e8a27c">A mind built from scratch, in continuous time.</text>
+  <text x="84" y="232" font-family="Helvetica, Arial, sans-serif" font-size="20" fill="#cbbfd8">No tokens · No pretrained model · No API keys · Runs offline</text>
+</svg>
