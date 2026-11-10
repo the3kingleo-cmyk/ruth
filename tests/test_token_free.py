@@ -14,7 +14,8 @@ from ruth.senses import byte_code
 
 PKG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ruth")
 STDLIB = set(getattr(sys, "stdlib_module_names", ())) or {
-    "argparse", "ast", "collections", "copy", "dataclasses", "glob", "http", "json", "os",
+    "argparse", "ast", "collections", "contextlib", "copy", "dataclasses", "errno", "fcntl",
+    "glob", "hashlib", "http", "json", "msvcrt", "os", "traceback",
     "re", "shutil", "struct", "subprocess", "sys", "tempfile", "threading", "time", "wave",
     "webbrowser", "__future__"}
 

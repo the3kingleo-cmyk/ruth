@@ -67,7 +67,8 @@ def cmd_talk(args):
             elif line.strip() == "/sleep":
                 from . import dream
                 r = dream.sleep(m)
-                print("ruth> (dreamt)", r["dreams"][0]["dream"] if r["dreams"] else "")
+                ds = r.get("dreams")
+                print("ruth> (dreamt)", ds[0]["dream"] if isinstance(ds, list) and ds else "")
             elif line.strip() in ("/good", "/bad"):
                 m.feedback(line.strip() == "/good")
             elif line.strip():

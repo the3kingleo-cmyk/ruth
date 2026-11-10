@@ -274,11 +274,11 @@ class TestSingleOwner(unittest.TestCase):
     def test_the_lock_survives_a_killed_owner(self):
         """fcntl locks are released by the kernel on death, so a crashed app
         must not leave her permanently unwritable."""
-        import fcntl
+        from ruth.owner import _lock
         _, owner, who_owns = self._owner_mod()
         path = os.path.join(self.tmp, ".ruth-owner.lock")
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _lock(fd)             # the platform's own lock, as a real owner takes it
         with self.assertRaises(Exception):
             with owner(self.tmp, label="other"):
                 pass

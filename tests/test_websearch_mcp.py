@@ -9,6 +9,7 @@ already-parsed frame killed the server and surfaced to the client as
 import ast
 import importlib.util
 import json
+import os
 import pathlib
 import sys
 import unittest
@@ -146,7 +147,24 @@ class TestNoCredentialsRequired(unittest.TestCase):
                 mods.update(a.name.split(".")[0] for a in n.names)
             elif isinstance(n, ast.ImportFrom) and n.module:
                 mods.add(n.module.split(".")[0])
-        self.assertTrue(mods <= set(sys.stdlib_module_names), mods - set(sys.stdlib_module_names))
+        self.assertEqual({m for m in mods if not _is_stdlib(m)}, set())
+
+
+def _is_stdlib(name):
+    """sys.stdlib_module_names is 3.10+; on 3.9 ask where the module lives."""
+    names = getattr(sys, "stdlib_module_names", None)
+    if names is not None:
+        return name in names
+    import importlib.util
+    import sysconfig
+    if name in sys.builtin_module_names:
+        return True
+    spec = importlib.util.find_spec(name)
+    if spec is None or not spec.origin:
+        return False
+    stdlib = os.path.realpath(sysconfig.get_paths()["stdlib"])
+    origin = os.path.realpath(spec.origin)
+    return origin.startswith(stdlib) and "site-packages" not in origin
 
 
 if __name__ == "__main__":

@@ -76,6 +76,77 @@ class TestApp(unittest.TestCase):
         life.stop.set()
         self.assertGreater(life.replayed, 0)
 
+    def test_a_request_wakes_her_from_a_long_dream(self):
+        # Regression: a night's sleep held the lock from start to finish (minutes
+        # on a Chromebook), so every request queued behind it and the page said
+        # "Failed to fetch". Now the dream hands over the lock between steps
+        # and wakes up when someone arrives.
+        import time
+        from ruth import dream
+        life = Life(tempfile.mkdtemp())
+        life.mind.teach("The sky is blue today. Grass is green. " * 12)
+        entered, release = threading.Event(), threading.Event()
+        real = dream.extinction
+
+        def slow_extinction(mind, rng, pause=None, **kw):
+            entered.set()
+            while not release.is_set():     # a long step that keeps yielding
+                if pause is not None and not pause():
+                    return {"visited": 0, "calmed": 0, "woke": True}
+            return real(mind, rng, pause=pause, **kw)
+
+        dream.extinction = slow_extinction
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(life))
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        worker = threading.Thread(target=life.background,
+                                  kwargs={"idle_replay": 1.0, "idle_sleep": 2.0}, daemon=True)
+        try:
+            worker.start()
+            # someone was here after the loop started; then a long quiet. (The
+            # pause matters on Windows, where time.time() ticks every ~15 ms and
+            # "after" could otherwise read as the same instant.)
+            time.sleep(0.2)
+            life.touched = time.time()
+            self.assertTrue(entered.wait(30), "she never fell asleep")
+            t0 = time.time()
+            c = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=30)
+            c.request("GET", "/api/state")
+            r = c.getresponse()
+            state = json.loads(r.read())
+            c.close()
+            self.assertEqual(r.status, 200)
+            self.assertLess(time.time() - t0, 5.0)
+            self.assertTrue(state["dreaming"])
+            deadline = time.time() + 30
+            while time.time() < deadline and life.dreaming:
+                time.sleep(0.1)
+            self.assertFalse(life.dreaming, "she did not wake up")
+            night = dream.journal(life.mind, 1)[-1]
+            self.assertIn("woke_early", night)   # the night was cut short, and recorded
+        finally:
+            release.set()
+            dream.extinction = real
+            life.stop.set()
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_a_failed_dream_step_is_journaled(self):
+        from ruth import dream
+        life = Life(tempfile.mkdtemp())
+        real = dream.nightmares
+
+        def broken(mind, rng):
+            raise RuntimeError("boom")
+
+        dream.nightmares = broken
+        try:
+            r = dream.sleep(life.mind, seed=0)
+        finally:
+            dream.nightmares = real
+        self.assertEqual(r["nightmares"], {"error": "RuntimeError: boom"})
+        self.assertIn("growth", r)                       # the rest of the night still ran
+        self.assertEqual(len(dream.journal(life.mind)), 1)
+
     def test_refuses_non_local_and_non_json(self):
         self.assertEqual(self.req("GET", "/api/state", headers={"Host": "evil.example"})[0], 403)
         c = http.client.HTTPConnection("127.0.0.1", self.port)
