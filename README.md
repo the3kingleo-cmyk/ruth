@@ -12,7 +12,7 @@ She learns from every moment she lives, keeps what you tell her in confidence, d
 ![Linux · macOS · Windows](https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-2a2521.svg)
 ![Only dependency: numpy](https://img.shields.io/badge/dependencies-numpy-7b7068.svg)
 
-[**Download**](#download) · [**What makes her different**](#what-makes-her-different) · [**How she works**](#how-she-works) · [**Using Ruth**](#using-ruth) · [**Architecture & research**](docs/ARCHITECTURE.md)
+[**Download**](#download) · [**Quick start**](#quick-start) · [**How she works**](#how-she-works) · [**Usage examples**](docs/USAGE.md) · [**FAQ**](docs/FAQ.md) · [**Contributing**](CONTRIBUTING.md) · [**Architecture & research**](docs/ARCHITECTURE.md)
 
 <img src="docs/images/app-desktop.png" alt="Ruth's app: she answers 'The sky is blue today.' and stops herself before saying a private door code" width="880">
 
@@ -65,6 +65,56 @@ Her mind is kept in your system's data folder: `~/.local/share/ruth` on Linux,
 `~/Library/Application Support/Ruth` on macOS, `%APPDATA%\Ruth` on Windows, or
 wherever `RUTH_HOME` points. Copy that folder to another computer and she wakes
 up there as herself.
+
+For an isolated installation from source, use a virtual environment. From the
+repository root:
+
+```sh
+python -m venv .venv
+```
+
+Activate it with `source .venv/bin/activate` on Linux, macOS or WSL, or
+`.\.venv\Scripts\Activate.ps1` in Windows PowerShell, then run:
+
+```sh
+python -m pip install .
+ruth --version
+ruth --help
+```
+
+Use `python3` in place of `python` if that is how Python 3 is installed on your
+system. Installing may need internet access to obtain build dependencies and
+numpy; the mind itself runs offline. See the [FAQ](docs/FAQ.md) for command
+lookup and Windows troubleshooting.
+
+## Quick start
+
+With the environment activated, try a separate demo mind so these examples
+do not teach your everyday Ruth:
+
+```sh
+ruth --home ./ruth-demo teach "The garden gate is green."
+ruth --home ./ruth-demo status
+ruth --home ./ruth-demo say "The garden gate is " -n 24
+```
+
+`teach` reports the bytes learned; `status` reports `moments_lived`, identity
+and temperament as JSON. `say` continues the prompt from what she has learned;
+the exact text is not a fixed expected answer. The first teaching command
+saves the new mind in `./ruth-demo`. Always put the global `--home` option
+**before** the subcommand.
+
+To use this same mind in the browser, run:
+
+```sh
+ruth --home ./ruth-demo app
+```
+
+Stop the app with Ctrl-C before running another command that writes to the
+same mind. The app owns that folder while it is running. For more ways to
+teach, talk, inspect dreams and use the Python or C interfaces, follow the
+[usage guide](docs/USAGE.md). Keep demo state and personal mind folders out of
+commits.
 
 ## How she works
 
@@ -123,11 +173,16 @@ experience.
 ## For developers
 
 ```sh
-python -m pip install -e .
-python -m unittest discover -s tests -t .   # 51 tests: brain, mind, dreams, organs, app,
-                                            # token-free proof, C/Python parity
+python -m pip install -e ".[dev]"
+python -m unittest discover -s tests -t . -v
 make -C ruth/csrc                           # optional dependency-free C runtime
 ```
+
+Run these from the repository root in a virtual environment. The `dev` extra
+installs pytest, which one of the unittest tests invokes. The suite covers
+the brain, mind, dreams, senses, app, CLI, token-free constraints and C/Python
+parity; the C tests need a C99 compiler. Use the
+[contribution workflow](CONTRIBUTING.md) for setup, focused tests and PR details.
 
 CI runs the tests on Linux, macOS and Windows with Python 3.9, 3.12 and 3.13.
 Pushing a `v*` tag publishes a release with a wheel, a source archive, and
